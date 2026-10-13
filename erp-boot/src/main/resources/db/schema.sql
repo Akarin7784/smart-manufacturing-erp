@@ -194,7 +194,8 @@ CREATE TABLE IF NOT EXISTS fin_arap_bill (
   updated_at DATETIME,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
-  UNIQUE (source_biz_type, source_biz_no)
+  UNIQUE (source_biz_type, source_biz_no),
+  INDEX idx_arap_partner (partner_id, bill_type)
 );
 
 CREATE TABLE IF NOT EXISTS fin_payment (
@@ -210,7 +211,8 @@ CREATE TABLE IF NOT EXISTS fin_payment (
   created_at DATETIME,
   updated_at DATETIME,
   created_by VARCHAR(64),
-  deleted TINYINT DEFAULT 0
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_payment_partner (partner_id)
 );
 CREATE TABLE IF NOT EXISTS fin_settlement (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -221,5 +223,6 @@ CREATE TABLE IF NOT EXISTS fin_settlement (
   created_at DATETIME,
   updated_at DATETIME,
   created_by VARCHAR(64),
-  deleted TINYINT DEFAULT 0
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_settlement_bill (bill_id)
 );

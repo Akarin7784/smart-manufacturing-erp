@@ -168,6 +168,53 @@ class FinanceServiceTest {
         assertThatThrownBy(() -> svc.settle(new SettleReq("R2", 20L, 10L, BigDecimal.ONE))).hasMessageContaining("往来单位");
     }
 
+    @Test void sub_centAmountsRejectedBeforeAnyDbWork() {
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("0.004")))).isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, null))).isInstanceOf(BizException.class);
+        verifyNoInteractions(settlementMapper);
+        assertThatThrownBy(() -> svc.registerPayment(new PaymentCreateReq(Payment.PAYMENT, 3L, new BigDecimal("0.001"), null, null)))
+                .isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> svc.registerPayment(new PaymentCreateReq(Payment.PAYMENT, 3L, null, null, null)))
+                .isInstanceOf(BizException.class);
+        verify(paymentMapper, never()).insert(any(Payment.class));
+    }
+
+    @Test void settleAmountIsRoundedHalfUp() {
+        ArapBill b = bill(ArapBill.AP, 3, "1");
+        when(billMapper.selectById(10L)).thenReturn(b);
+        when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "1"));
+        Settlement st = svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("0.125")));
+        assertThat(st.getAmount()).isEqualTo(new BigDecimal("0.13"));
+        assertThat(b.getSettledAmount()).isEqualByComparingTo("0.13");
+    }
+
+    @Test void paymentAndBillUpdateConflicts() {
+        when(billMapper.selectById(10L)).thenReturn(bill(ArapBill.AP, 3, "100"));
+        when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "100"));
+        when(paymentMapper.updateById(any(Payment.class))).thenReturn(0);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
+    }
+
+    @Test void idempotencyComparesBillAndPayment() {
+        Settlement done = new Settlement();
+        done.setRequestNo("R1"); done.setBillId(10L); done.setPaymentId(20L); done.setAmount(BigDecimal.ONE);
+        when(settlementMapper.selectOne(any())).thenReturn(done);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 11L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 21L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
+    }
+
+    @Test void registerPaymentKeepsGivenDate() {
+        var d = java.time.LocalDate.of(2026, 1, 2);
+        assertThat(svc.registerPayment(new PaymentCreateReq(Payment.RECEIPT, 4L, BigDecimal.ONE, d, null)).getPaidDate()).isEqualTo(d);
+    }
+
+    @Test void requireBill() {
+        assertThatThrownBy(() -> svc.requireBill(1L)).extracting("code").isEqualTo(404);
+        ArapBill b = bill(ArapBill.AR, 1, "1");
+        when(billMapper.selectById(10L)).thenReturn(b);
+        assertThat(svc.requireBill(10L)).isSameAs(b);
+    }
+
     @Test void missingBillOrPayment() {
         assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(404);
         when(billMapper.selectById(10L)).thenReturn(bill(ArapBill.AP, 3, "100"));

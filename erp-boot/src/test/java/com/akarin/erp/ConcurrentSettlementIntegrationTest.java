@@ -1,10 +1,19 @@
 package com.akarin.erp;
 
+import com.akarin.erp.finance.mapper.ArapBillMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -12,60 +21,140 @@ import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 真正多线程：两笔核销同时打同一张应付单，金额之和超过余额，只能成功一笔 */
+/**
+ * 真实 H2 + 多线程并发。为了不 flaky：在 ArapBillMapper.selectById 返回后加一道 CyclicBarrier，
+ * 保证两个线程都读到同一版本的单据后再继续，从而稳定触发乐观锁冲突，而不是偶尔串行执行。
+ */
 @SpringBootTest
 @AutoConfigureMockMvc
 class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
+    static volatile CyclicBarrier gate;
+    static volatile Long gateBillId;
 
-    @RepeatedTest(5)
-    void concurrentSettlementsCannotOverSettle() throws Exception {
-        String t = login("admin", "admin123");
+    @TestConfiguration
+    static class GateConfig {
+        @Bean
+        static BeanPostProcessor arapBillMapperGate() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String name) {
+                    if (!(bean instanceof ArapBillMapper target) || Proxy.isProxyClass(bean.getClass()) && name.startsWith("gated")) return bean;
+                    return Proxy.newProxyInstance(ArapBillMapper.class.getClassLoader(), new Class<?>[]{ArapBillMapper.class}, (p, m, args) -> {
+                        Object r;
+                        try { r = m.invoke(target, args); } catch (InvocationTargetException e) { throw e.getCause(); }
+                        CyclicBarrier g = gate;
+                        if (g != null && m.getName().equals("selectById") && args != null && args[0].equals(gateBillId)) {
+                            g.await(10, TimeUnit.SECONDS);
+                        }
+                        return r;
+                    });
+                }
+            };
+        }
+    }
+
+    String t;
+
+    @BeforeEach void setUp() throws Exception { t = login("admin", "admin123"); }
+    @AfterEach void tearDown() { gate = null; gateBillId = null; }
+
+    record Ctx(long supplierId, long billId, long materialId, long warehouseId) {}
+
+    Ctx receivedPurchase(String qty, String price) throws Exception {
         long mat = mdm(t, "materials", "M"), sup = mdm(t, "suppliers", "S"), wh = mdm(t, "warehouses", "W");
         JsonNode order = ok(t, "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
-                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":10,\"price\":10}]}").path("order");
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":" + qty + ",\"price\":" + price + "}]}").path("order");
         long id = order.path("id").asLong();
         long ap = ok(t, "POST", "/api/purchase/orders/" + id + "/submit", null).path("approvalId").asLong();
         ok(t, "POST", "/api/workflow/approvals/" + ap + "/decide", "{\"approved\":true}");
         ok(t, "POST", "/api/purchase/orders/" + id + "/receive", null);
         long billId = ok(t, "GET", "/api/finance/bills?sourceBizNo=" + order.path("orderNo").asText(), null)
-                .path("records").get(0).path("id").asLong();                       // 应付 100.00
-        // 两张独立付款单，避免冲突落在付款单上，只考察单据层面的并发控制
-        long p1 = ok(t, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":100}").path("id").asLong();
-        long p2 = ok(t, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":100}").path("id").asLong();
-        String[] amounts = {"70", "60"};                                           // 70 + 60 > 100
-        long[] pays = {p1, p2};
+                .path("records").get(0).path("id").asLong();
+        return new Ctx(sup, billId, mat, wh);
+    }
 
-        ExecutorService pool = Executors.newFixedThreadPool(2);
-        CountDownLatch ready = new CountDownLatch(2), go = new CountDownLatch(1);
-        List<Future<Integer>> results = new ArrayList<>();
+    long payment(long sup, String amount) throws Exception {
+        return ok(t, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":" + amount + "}").path("id").asLong();
+    }
+
+    /** 两个请求同时起跑，返回各自 body.code（顺序与入参一致） */
+    List<Integer> race(String url, String... bodies) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(bodies.length);
+        CountDownLatch ready = new CountDownLatch(bodies.length), go = new CountDownLatch(1);
         try {
-            for (int i = 0; i < 2; i++) {
-                String body = "{\"requestNo\":\"" + UUID.randomUUID() + "\",\"paymentId\":" + pays[i] +
-                        ",\"billId\":" + billId + ",\"amount\":" + amounts[i] + "}";
-                results.add(pool.submit(() -> {
-                    ready.countDown();
-                    go.await();
-                    return code(t, "POST", "/api/finance/settlements", body);
-                }));
-            }
+            List<Future<Integer>> fs = new ArrayList<>();
+            for (String b : bodies) fs.add(pool.submit(() -> { ready.countDown(); go.await(); return code(t, "POST", url, b); }));
             assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
             go.countDown();
-            List<Integer> codes = new ArrayList<>();
-            for (Future<Integer> f : results) codes.add(f.get(30, TimeUnit.SECONDS));
-            // 一笔成功；另一笔要么乐观锁冲突 409，要么读到新余额后超额 400
-            assertThat(codes).containsOnlyOnce(0);
-            assertThat(codes).anyMatch(c -> c == 409 || c == 400);
+            List<Integer> out = new ArrayList<>();
+            for (Future<Integer> f : fs) out.add(f.get(30, TimeUnit.SECONDS));
+            return out;
         } finally {
             pool.shutdownNow();
         }
+    }
 
-        JsonNode bill = ok(t, "GET", "/api/finance/bills/" + billId, null);
+    static String settle(String req, long pay, long bill, String amt) {
+        return "{\"requestNo\":\"" + req + "\",\"paymentId\":" + pay + ",\"billId\":" + bill + ",\"amount\":" + amt + "}";
+    }
+
+    @RepeatedTest(5)
+    void differentRequestNos_overBalance_onlyOneSucceeds_other409() throws Exception {
+        Ctx c = receivedPurchase("10", "10");                     // 应付 100.00
+        long p1 = payment(c.supplierId(), "100"), p2 = payment(c.supplierId(), "100");
+        gate = new CyclicBarrier(2); gateBillId = c.billId();
+        List<Integer> codes = race("/api/finance/settlements",
+                settle(UUID.randomUUID().toString(), p1, c.billId(), "70"),
+                settle(UUID.randomUUID().toString(), p2, c.billId(), "60"));
+        gate = null;
+        assertThat(codes).containsExactlyInAnyOrder(0, 409);
+        BigDecimal expected = new BigDecimal(codes.get(0) == 0 ? "70" : "60");
+        JsonNode bill = ok(t, "GET", "/api/finance/bills/" + c.billId(), null);
+        assertThat(bill.path("settledAmount").decimalValue()).isEqualByComparingTo(expected);
         assertThat(bill.path("status").asText()).isEqualTo("PARTIAL");
-        assertThat(bill.path("settledAmount").decimalValue().compareTo(new java.math.BigDecimal("70")) == 0
-                || bill.path("settledAmount").decimalValue().compareTo(new java.math.BigDecimal("60")) == 0).isTrue();
-        assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + billId, null).path("total").asInt()).isEqualTo(1);
-        long applied = ok(t, "GET", "/api/finance/payments?partnerId=" + sup, null).path("records").findValues("appliedAmount")
-                .stream().filter(v -> v.decimalValue().signum() > 0).count();
-        assertThat(applied).isEqualTo(1);
+        assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
+        // 失败那笔的付款单未被占用
+        long loser = codes.get(0) == 0 ? p2 : p1;
+        for (JsonNode p : ok(t, "GET", "/api/finance/payments?partnerId=" + c.supplierId(), null).path("records"))
+            if (p.path("id").asLong() == loser) assertThat(p.path("appliedAmount").decimalValue()).isEqualByComparingTo("0");
+    }
+
+    @RepeatedTest(5)
+    void sameRequestNoSubmittedConcurrently_onlyOneSettlementRecord() throws Exception {
+        Ctx c = receivedPurchase("10", "10");
+        long p = payment(c.supplierId(), "100");
+        String body = settle(UUID.randomUUID().toString(), p, c.billId(), "30");
+        gate = new CyclicBarrier(2); gateBillId = c.billId();
+        List<Integer> codes = race("/api/finance/settlements", body, body);
+        gate = null;
+        assertThat(codes).contains(0);
+        assertThat(codes).allMatch(x -> x == 0 || x == 409);
+        assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
+        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+        // 冲突方重放同一请求号 → 幂等返回成功，且不重复核销
+        assertThat(code(t, "POST", "/api/finance/settlements", body)).isZero();
+        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+    }
+
+    @RepeatedTest(3)
+    void concurrentDuplicateReceiveAndShip_noServerError() throws Exception {
+        long mat = mdm(t, "materials", "M"), sup = mdm(t, "suppliers", "S"), cus = mdm(t, "customers", "C"), wh = mdm(t, "warehouses", "W");
+        JsonNode po = ok(t, "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":10,\"price\":1}]}").path("order");
+        long poId = po.path("id").asLong();
+        ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/purchase/orders/" + poId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
+        List<Integer> r = race("/api/purchase/orders/" + poId + "/receive", "", "");
+        assertThat(r).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == 409);
+        assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + po.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
+        assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("10");
+
+        JsonNode so = ok(t, "POST", "/api/sales/orders", "{\"customerId\":" + cus + ",\"warehouseId\":" + wh +
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":4,\"price\":2}]}").path("order");
+        long soId = so.path("id").asLong();
+        ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/sales/orders/" + soId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
+        List<Integer> s = race("/api/sales/orders/" + soId + "/ship", "", "");
+        assertThat(s).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == 409);
+        assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + so.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
+        assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("6");
     }
 }

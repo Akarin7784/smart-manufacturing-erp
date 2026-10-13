@@ -27,6 +27,7 @@ public class SettlementController {
     @PreAuthorize("hasAuthority('finance:write')")
     public R<Payment> register(@Valid @RequestBody PaymentCreateReq req) { return R.ok(service.registerPayment(req)); }
 
+    @PreAuthorize("hasAuthority('finance:read')")
     @GetMapping("/payments")
     public R<Page<Payment>> payments(@RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "20") long size,
                                      @RequestParam(required = false) String paymentType,
@@ -40,6 +41,7 @@ public class SettlementController {
     @PreAuthorize("hasAuthority('finance:write')")
     public R<Settlement> settle(@Valid @RequestBody SettleReq req) { return R.ok(service.settle(req)); }
 
+    @PreAuthorize("hasAuthority('finance:read')")
     @GetMapping("/settlements")
     public R<Page<Settlement>> settlements(@RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "20") long size,
                                            @RequestParam(required = false) Long billId) {

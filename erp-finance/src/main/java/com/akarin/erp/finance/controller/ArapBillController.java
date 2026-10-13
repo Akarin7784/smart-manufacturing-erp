@@ -8,6 +8,7 @@ import com.akarin.erp.finance.service.FinanceService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/finance")
 @RequiredArgsConstructor
+@PreAuthorize("hasAuthority('finance:read')")
 public class ArapBillController {
     private final ArapBillMapper mapper;
     private final FinanceService financeService;
@@ -34,7 +36,7 @@ public class ArapBillController {
     }
 
     @GetMapping("/bills/{id}")
-    public R<ArapBill> get(@PathVariable Long id) { return R.ok(mapper.selectById(id)); }
+    public R<ArapBill> get(@PathVariable Long id) { return R.ok(financeService.requireBill(id)); }
 
     /** 对账：按客户（AR）/供应商（AP）汇总 */
     @GetMapping("/reconciliation")

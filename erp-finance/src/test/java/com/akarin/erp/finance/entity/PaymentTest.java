@@ -16,6 +16,14 @@ class PaymentTest {
         assertThat(p.unapplied()).isEqualByComparingTo("0");
     }
 
+    @Test void applyRejectsAmountRoundingToZero() {
+        Payment p = new Payment();
+        p.setAmount(BigDecimal.TEN); p.setAppliedAmount(BigDecimal.ZERO);
+        assertThatThrownBy(() -> p.apply(new BigDecimal("0.001"))).isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> p.apply(null)).isInstanceOf(BizException.class);
+        assertThat(p.unapplied()).isEqualByComparingTo("10");
+    }
+
     @Test void billTypeMapping() {
         assertThat(Payment.billTypeOf(Payment.RECEIPT)).isEqualTo(ArapBill.AR);
         assertThat(Payment.billTypeOf(Payment.PAYMENT)).isEqualTo(ArapBill.AP);

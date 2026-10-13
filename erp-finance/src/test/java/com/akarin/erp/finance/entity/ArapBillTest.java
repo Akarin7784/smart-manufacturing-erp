@@ -42,6 +42,16 @@ class ArapBillTest {
         assertThatThrownBy(() -> b.settle(BigDecimal.ONE)).isInstanceOf(BizException.class).hasMessageContaining("已核销");
     }
 
+    @Test void amountRoundedBeforeValidation() {
+        ArapBill b = bill("10");
+        assertThatThrownBy(() -> b.settle(new BigDecimal("0.001"))).isInstanceOf(BizException.class).hasMessageContaining("0.01");
+        assertThatThrownBy(() -> b.settle(new BigDecimal("0.004"))).isInstanceOf(BizException.class);
+        assertThat(b.getStatus()).isEqualTo(ArapBill.OPEN);
+        b.settle(new BigDecimal("0.005"));               // HALF_UP → 0.01
+        assertThat(b.getSettledAmount()).isEqualByComparingTo("0.01");
+        assertThat(b.getStatus()).isEqualTo(ArapBill.PARTIAL);
+    }
+
     @Test void rejectNonPositive() {
         ArapBill b = bill("10");
         assertThatThrownBy(() -> b.settle(BigDecimal.ZERO)).isInstanceOf(BizException.class);

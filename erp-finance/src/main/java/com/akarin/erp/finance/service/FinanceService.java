@@ -69,11 +69,13 @@ public class FinanceService {
         String billType = Payment.billTypeOf(req.paymentType());
         if (ArapBill.AR.equals(billType)) customerService.require(req.partnerId());
         else supplierService.require(req.partnerId());
+        BigDecimal amount = req.amount() == null ? null : Money.of(req.amount());
+        if (amount == null || amount.signum() <= 0) throw new BizException("收付款金额必须 ≥ 0.01");
         Payment p = new Payment();
         p.setPaymentNo(NoGenerator.next(Payment.RECEIPT.equals(req.paymentType()) ? "RC" : "PY"));
         p.setPaymentType(req.paymentType());
         p.setPartnerId(req.partnerId());
-        p.setAmount(Money.of(req.amount()));
+        p.setAmount(amount);
         p.setAppliedAmount(Money.of(BigDecimal.ZERO));
         p.setPaidDate(req.paidDate() == null ? LocalDate.now() : req.paidDate());
         p.setRemark(req.remark());
@@ -88,6 +90,8 @@ public class FinanceService {
      */
     @Transactional
     public Settlement settle(SettleReq req) {
+        BigDecimal amt = req.amount() == null ? null : Money.of(req.amount());
+        if (amt == null || amt.signum() <= 0) throw new BizException("核销金额必须 ≥ 0.01");
         Settlement done = settlementMapper.selectOne(
                 new LambdaQueryWrapper<Settlement>().eq(Settlement::getRequestNo, req.requestNo()));
         if (done != null) return idempotent(done, req);
@@ -101,7 +105,6 @@ public class FinanceService {
         if (!pay.getPartnerId().equals(bill.getPartnerId()))
             throw new BizException("收付款与单据的往来单位不一致");
 
-        BigDecimal amt = Money.of(req.amount());
         bill.settle(amt);
         pay.apply(amt);
         if (billMapper.updateById(bill) != 1 || paymentMapper.updateById(pay) != 1)
@@ -125,6 +128,12 @@ public class FinanceService {
                 && Money.of(done.getAmount()).compareTo(Money.of(req.amount())) == 0;
         if (!same) throw new BizException(409, "核销请求号已被使用且参数不一致: " + req.requestNo());
         return done;
+    }
+
+    public ArapBill requireBill(Long id) {
+        ArapBill b = billMapper.selectById(id);
+        if (b == null) throw new BizException(404, "应收应付单不存在: " + id);
+        return b;
     }
 
     public List<ReconciliationRow> reconcile(String billType, Long partnerId) {

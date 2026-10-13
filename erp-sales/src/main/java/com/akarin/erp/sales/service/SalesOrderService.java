@@ -98,12 +98,15 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
         SalesOrderDetail d = detail(id);
         if (!"APPROVED".equals(d.order().getStatus()))
             throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
+        // 带状态条件的更新：并发重复发货时只有一个请求能把 APPROVED 改成 SHIPPED，其余返回 409
+        boolean moved = lambdaUpdate().set(SalesOrder::getStatus, "SHIPPED")
+                .eq(SalesOrder::getId, id).eq(SalesOrder::getStatus, "APPROVED").update();
+        if (!moved) throw new BizException(409, "单据状态已变化，请刷新后重试");
+        d.order().setStatus("SHIPPED");
         for (var it : d.items()) {
             inventoryService.stockOut(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
                     "SALES_SHIPMENT", d.order().getOrderNo(), null);
         }
-        d.order().setStatus("SHIPPED");
-        updateById(d.order());
         BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
         publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.SALES_SHIPMENT,
                 d.order().getOrderNo(), d.order().getCustomerId(), amount));

@@ -66,7 +66,13 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 - `POST /api/finance/settlements` 核销，`GET /api/finance/settlements?billId=`
 - `GET /api/finance/reconciliation?billType=AR|AP&partnerId=` 对账汇总
 
+## 约定
+- 响应体统一为 `{code,msg,data}`；出错时 HTTP 状态和 `code` 一致（400 参数或业务错误、401 未登录、403 无权限、404 不存在、405、409 并发或重复冲突、500）。
+- 金额参数要求 ≥0.01、最多 2 位小数；服务层先按 HALF_UP 四舍五入，再做校验。
+
 ## 财务闭环
+- 权限：查询类接口需要 `finance:read`，收付款登记和核销需要 `finance:write`（admin 已预置这两个权限）。
+- 收货和发货用带状态条件的更新（`APPROVED → RECEIVED/SHIPPED`）。并发重复提交时只有一个请求成功，其余返回 409；顺序重复提交返回 400。
 - 采购收货 / 销售发货完成后发布 `StockBizCompletedEvent`，财务同步监听（同一事务）生成 **应付 AP / 应收 AR**；金额 = Σ 数量×单价（BigDecimal，2 位，HALF_UP），按来源单号唯一，重复事件不重复生成。
 - 收付款：`PAYMENT` 付款（供应商）只能核销 AP，`RECEIPT` 收款（客户）只能核销 AR，往来单位必须一致。
 - 核销状态机：`OPEN 未核销 → PARTIAL 部分核销 → SETTLED 已核销`；核销金额不得超过单据余额，也不得超过收付款未核销余额。

@@ -32,6 +32,18 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         assertThat(ok(admin, "GET", "/api/finance/bills?sourceBizNo=NOPE", null).path("total").asInt()).isZero();
     }
 
+    @Test void validationAndNotFound() throws Exception {
+        assertThat(code(admin, "GET", "/api/finance/bills/999999", null)).isEqualTo(404);
+        // 0.001 不满足 @DecimalMin(0.01)/@Digits(fraction=2)
+        assertThat(code(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"v1\",\"paymentId\":1,\"billId\":1,\"amount\":0.001}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"v2\",\"paymentId\":1,\"billId\":1,\"amount\":1.234}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":0.004}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/finance/payments", "not-json")).isEqualTo(400);
+        assertThat(code(admin, "GET", "/api/finance/bills?partnerId=abc", null)).isEqualTo(400);
+        assertThat(code(admin, "GET", "/api/no-such-endpoint", null)).isEqualTo(404);
+        assertThat(code(admin, "DELETE", "/api/finance/bills", null)).isEqualTo(405);
+    }
+
     @Test void orderQueriesRejectAndResubmit() throws Exception {
         for (String type : new String[]{"purchase", "sales"}) {
             String partner = type.equals("purchase") ? "supplier" : "customer";
@@ -59,6 +71,9 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         String body = "{\"requestNo\":\"x\",\"paymentId\":1,\"billId\":1,\"amount\":1}";
         assertThat(code(t, "POST", "/api/finance/settlements", body)).isEqualTo(403);
         assertThat(code(t, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":1}")).isEqualTo(403);
-        assertThat(code(t, "GET", "/api/finance/bills", null)).isZero();
+        assertThat(code(t, "GET", "/api/finance/bills", null)).isEqualTo(403);
+        assertThat(code(t, "GET", "/api/finance/reconciliation", null)).isEqualTo(403);
+        assertThat(code(t, "GET", "/api/finance/settlements", null)).isEqualTo(403);
+        assertThat(code(null, "GET", "/api/finance/bills", null)).isEqualTo(401);
     }
 }

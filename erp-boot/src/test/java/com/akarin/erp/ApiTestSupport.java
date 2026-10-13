@@ -31,7 +31,12 @@ abstract class ApiTestSupport {
         if (token != null) req.header("Authorization", "Bearer " + token);
         var res = mvc.perform(req).andReturn().getResponse();
         String s = res.getContentAsString(StandardCharsets.UTF_8);
-        return s.isEmpty() ? om.createObjectNode().put("http", res.getStatus()) : om.readTree(s);
+        if (s.isEmpty()) return om.createObjectNode().put("http", res.getStatus());
+        JsonNode resp = om.readTree(s);
+        int code = resp.path("code").asInt();
+        // HTTP 状态必须与 body.code 一致
+        assertThat(res.getStatus()).as(method + " " + url + " http status vs body " + resp).isEqualTo(code == 0 ? 200 : code);
+        return resp;
     }
 
     JsonNode ok(String token, String method, String url, String body) throws Exception {
