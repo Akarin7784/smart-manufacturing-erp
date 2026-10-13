@@ -119,9 +119,18 @@ public class FinanceService {
         try {
             settlementMapper.insert(s);
         } catch (DuplicateKeyException ex) {
-            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION, "重复的核销请求（并发提交）: " + req.requestNo());
+            throw new DuplicateRequestNoException(req.requestNo());
         }
         return s;
+    }
+
+    /** 并发同号提交的失败方：在新事务里读取已提交的那条，参数相同返回原结果，不同返回 409/40902 */
+    @Transactional(readOnly = true)
+    public Settlement replaySettlement(SettleReq req) {
+        Settlement done = settlementMapper.selectOne(
+                new LambdaQueryWrapper<Settlement>().eq(Settlement::getRequestNo, req.requestNo()));
+        if (done == null) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        return idempotent(done, req);
     }
 
     private Settlement idempotent(Settlement done, SettleReq req) {

@@ -56,7 +56,8 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
 
     String t;
 
-    @BeforeEach void setUp() throws Exception { t = login("admin", "admin123"); }
+    @BeforeEach void setUp() throws Exception { t = login("admin", "admin123"); apr = login("approver", "approver123"); }
+    String apr;   // 申请人不能审批自己的单据
     @AfterEach void tearDown() { gate = null; gateBillId = null; }
 
     record Ctx(long supplierId, long billId, long materialId, long warehouseId) {}
@@ -67,7 +68,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":" + qty + ",\"price\":" + price + "}]}").path("order");
         long id = order.path("id").asLong();
         long ap = ok(t, "POST", "/api/purchase/orders/" + id + "/submit", null).path("approvalId").asLong();
-        ok(t, "POST", "/api/workflow/approvals/" + ap + "/decide", "{\"approved\":true}");
+        ok(apr, "POST", "/api/workflow/approvals/" + ap + "/decide", "{\"approved\":true}");
         ok(t, "POST", "/api/purchase/orders/" + id + "/receive", null);
         long billId = ok(t, "GET", "/api/finance/bills?sourceBizNo=" + order.path("orderNo").asText(), null)
                 .path("records").get(0).path("id").asLong();
@@ -143,7 +144,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         JsonNode po = ok(t, "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":10,\"price\":1}]}").path("order");
         long poId = po.path("id").asLong();
-        ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/purchase/orders/" + poId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
+        ok(apr, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/purchase/orders/" + poId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
         List<Integer> r = race("/api/purchase/orders/" + poId + "/receive", "", "");
         assertThat(r).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + po.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
@@ -152,7 +153,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         JsonNode so = ok(t, "POST", "/api/sales/orders", "{\"customerId\":" + cus + ",\"warehouseId\":" + wh +
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":4,\"price\":2}]}").path("order");
         long soId = so.path("id").asLong();
-        ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/sales/orders/" + soId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
+        ok(apr, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/sales/orders/" + soId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
         List<Integer> s = race("/api/sales/orders/" + soId + "/ship", "", "");
         assertThat(s).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + so.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);

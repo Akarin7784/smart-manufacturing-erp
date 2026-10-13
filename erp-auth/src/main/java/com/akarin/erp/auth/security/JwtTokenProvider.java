@@ -14,13 +14,14 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class JwtTokenProvider {
+    public static final String CLAIM_AUTH = "auth", CLAIM_TOKEN_VERSION = "tv";
     private final JwtProperties props;
 
     private SecretKey key() { return Keys.hmacShaKeyFor(props.getSecret().getBytes(StandardCharsets.UTF_8)); }
 
-    public String create(String username, List<String> authorities) {
+    public String create(String username, List<String> authorities, int tokenVersion) {
         long now = System.currentTimeMillis();
-        return Jwts.builder().subject(username).claim("auth", authorities)
+        return Jwts.builder().subject(username).claim(CLAIM_AUTH, authorities).claim(CLAIM_TOKEN_VERSION, tokenVersion)
                 .issuedAt(new Date(now)).expiration(new Date(now + props.getExpireMinutes() * 60_000))
                 .signWith(key()).compact();
     }

@@ -19,7 +19,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtTokenProvider tokens) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtTokenProvider tokens, UserTokenState tokenState) throws Exception {
         http.csrf(AbstractHttpConfigurer::disable)
             .headers(h -> h.frameOptions(f -> f.sameOrigin()))
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -29,7 +29,7 @@ public class SecurityConfig {
             .exceptionHandling(e -> e
                 .authenticationEntryPoint((req, res, ex) -> writeJson(res, ErrorCode.UNAUTHORIZED))
                 .accessDeniedHandler((req, res, ex) -> writeJson(res, ErrorCode.FORBIDDEN)))
-            .addFilterBefore(new JwtAuthFilter(tokens), UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(new JwtAuthFilter(tokens, tokenState), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
@@ -38,6 +38,12 @@ public class SecurityConfig {
         res.setStatus(ec.getHttpStatus());
         res.setContentType("application/json;charset=UTF-8");
         res.getWriter().write("{\"code\":" + ec.getCode() + ",\"msg\":\"" + ec.getDefaultMsg() + "\",\"data\":null}");
+    }
+
+    /** ROLE_ADMIN 对所有 hasAuthority 放行 */
+    @Bean
+    static org.springframework.security.access.expression.method.MethodSecurityExpressionHandler methodSecurityExpressionHandler() {
+        return new AdminBypassExpressionHandler();
     }
 
     @Bean

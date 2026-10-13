@@ -89,8 +89,8 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
             long id = o.path("id").asLong();
             long ap = ok(admin, "POST", "/api/" + type + "/orders/" + id + "/submit", null).path("approvalId").asLong();
             assertThat(code(admin, "POST", "/api/" + type + "/orders/" + id + "/submit", null)).isEqualTo(400);
-            ok(admin, "POST", "/api/workflow/approvals/" + ap + "/decide", "{\"approved\":false,\"comment\":\"no\"}");
-            assertThat(ok(admin, "GET", "/api/" + type + "/orders/" + id, null).path("order").path("status").asText()).isEqualTo("REJECTED");
+            ok(login("approver", "approver123"), "POST", "/api/workflow/approvals/" + ap + "/decide", "{\"approved\":false,\"comment\":\"no\"}");
+            assertThat(ok(admin, "GET", "/api/" + type + "/orders/" + id, null).path("order").path("status").asText()).as("驳回后回到草稿，可修改重提（P2 行为）").isEqualTo("DRAFT");
             ok(admin, "POST", "/api/" + type + "/orders/" + id + "/submit", null);
             assertThat(ok(admin, "GET", "/api/" + type + "/orders?status=PENDING", null).path("total").asInt()).isPositive();
             assertThat(ok(admin, "GET", "/api/" + type + "/orders", null).path("total").asInt()).isPositive();
