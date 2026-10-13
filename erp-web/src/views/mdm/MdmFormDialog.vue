@@ -69,6 +69,8 @@ function payload() {
     const v = typeof form[f.prop] === 'string' ? form[f.prop].trim() : form[f.prop]
     body[f.prop] = v === '' ? null : v
   }
+  // 乐观锁：编辑时原样带回该行的 version，新增不传
+  if (isEdit.value && props.row?.version != null) body.version = props.row.version
   return body
 }
 
