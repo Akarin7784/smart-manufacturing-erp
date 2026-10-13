@@ -13,7 +13,9 @@ npm run test
 npm run test:coverage
 ```
 
-后端（H2）：`mvn -pl erp-boot -am spring-boot:run`，默认账号 `admin / admin123`。Node ≥ 20。
+开发代理目标由环境变量 `VITE_PROXY_TARGET` 指定，默认 `http://localhost:8080`，例如：`VITE_PROXY_TARGET=http://localhost:8081 npm run dev`。
+
+后端（H2）：`mvn -pl erp-boot -am spring-boot:run`，默认账号 `admin / admin123`。Node ≥ 22（见 `.nvmrc`）。Element Plus 通过 unplugin-vue-components / unplugin-auto-import 按需引入。
 
 ## 目录
 
@@ -21,7 +23,7 @@ npm run test:coverage
 - `src/stores/auth.js`：token / 用户（Pinia + localStorage）
 - `src/router/index.js`：路由与登录守卫
 - `src/layout/MainLayout.vue`：侧边菜单 + 顶栏（用户、退出登录）
-- `src/views/LoginView.vue`：登录页
+- `src/views/LoginView.vue`：登录页（`redirect` 只接受以 `/` 开头且不以 `//` 开头的站内路径，否则回到 `/`）
 - `src/views/mdm/MdmListView.vue` + `src/config/mdm.js`：主数据通用列表页（物料/客户/供应商/仓库）
 
 ## 接口约定与错误处理

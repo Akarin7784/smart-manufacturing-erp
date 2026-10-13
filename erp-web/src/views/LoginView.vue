@@ -21,6 +21,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { login, me } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
+import { safeRedirect } from '@/utils/redirect'
 
 const router = useRouter()
 const route = useRoute()
@@ -48,7 +49,7 @@ async function onSubmit() {
       auth.setUser({ username: form.username, authorities: [] })
     }
     ElMessage.success('登录成功')
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    const redirect = safeRedirect(route.query.redirect)
     await router.replace(redirect)
   } catch {
     // 错误提示已由请求拦截器统一处理

@@ -12,7 +12,7 @@ describe('MdmListView', () => {
   beforeEach(() => { pageMdm.mockReset(); setActivePinia(createPinia()) })
 
   it('挂载即按默认分页加载并渲染表格', async () => {
-    pageMdm.mockResolvedValue(page([{ id: 1, code: 'M001', name: '螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 }, { id: 2, code: 'M002', name: '停用料', status: 0 }], 2))
+    pageMdm.mockResolvedValue(page([{ id: 1, code: 'M001', name: '螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 }, { id: 2, code: 'M002', name: '停用料', status: 0, createdAt: '2026-10-14T03:24:49.088012' }, { id: 3, code: 'M003', name: '未知', status: null }], 3))
     const w = mount(MdmListView, { props: { resource: 'materials' } })
     await flushPromises()
     expect(pageMdm).toHaveBeenCalledWith('materials', { page: 1, size: 20 })
@@ -20,7 +20,12 @@ describe('MdmListView', () => {
     expect(w.text()).toContain('M001')
     expect(w.text()).toContain('启用')
     expect(w.text()).toContain('停用')
-    expect(w.vm.total).toBe(2)
+    expect(w.vm.total).toBe(3)
+    const rows = w.findAll('.el-table__body tr')
+    expect(rows[0].text()).toContain('启用')
+    expect(rows[1].text()).toContain('停用')
+    expect(rows[1].text()).toContain('2026-10-14 03:24:49')
+    expect(rows[2].text()).not.toMatch(/启用|停用/)
   })
   it('搜索带 keyword 并回到第 1 页；重置清空', async () => {
     pageMdm.mockResolvedValue(page([], 0))
@@ -28,6 +33,7 @@ describe('MdmListView', () => {
     await flushPromises()
     w.vm.onPageChange(3); await flushPromises()
     expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 3, size: 20 })
+    expect(w.findComponent({ name: 'ElTableColumn' }).props('index')(0)).toBe(41)
     await w.find('input[data-test=keyword]').setValue('  华东 ')
     await w.find('[data-test=search]').trigger('click'); await flushPromises()
     expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20, keyword: '华东' })

@@ -37,7 +37,7 @@ describe('request 拦截器', () => {
   })
   it('HTTP 401 清 token 并跳转登录', async () => {
     useAuthStore().setToken('t')
-    await expect(onRejected(err(401, ''))).rejects.toBeInstanceOf(BizError)
+    await expect(onRejected(err(401, { code: 401, msg: '未登录或登录已失效', data: null }))).rejects.toBeInstanceOf(BizError)
     expect(useAuthStore().token).toBe('')
     expect(redirect).toHaveBeenCalled()
     expect(ElMessage.error).toHaveBeenCalledWith(MSG.unauthorized)

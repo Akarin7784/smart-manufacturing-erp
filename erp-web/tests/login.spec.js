@@ -55,6 +55,15 @@ describe('LoginView', () => {
     expect(useAuthStore().username).toBe('bob')
     expect(replace).toHaveBeenCalledWith('/')
   })
+  it('外部 redirect 被忽略，跳首页', async () => {
+    authApi.login.mockResolvedValue({ token: 'jwt' })
+    authApi.me.mockResolvedValue({ username: 'a', authorities: [] })
+    route.query = { redirect: '//evil.com' }
+    const w = mk()
+    w.vm.form.username = 'a'; w.vm.form.password = 'b'
+    await w.vm.onSubmit()
+    expect(replace).toHaveBeenCalledWith('/')
+  })
   it('登录失败不保存 token 不跳转', async () => {
     authApi.login.mockRejectedValue(new Error('用户名或密码错误'))
     const w = mk()

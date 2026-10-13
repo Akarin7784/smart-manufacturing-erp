@@ -1,5 +1,5 @@
 const status = { prop: 'status', label: '状态', type: 'status', width: 90 }
-const created = { prop: 'createdAt', label: '创建时间', width: 180 }
+const created = { prop: 'createdAt', label: '创建时间', type: 'datetime', width: 180 }
 
 export const MDM_RESOURCES = {
   materials: {

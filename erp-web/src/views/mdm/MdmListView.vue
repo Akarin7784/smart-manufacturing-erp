@@ -6,11 +6,12 @@
       <el-button data-test="reset" @click="onReset">重置</el-button>
     </div>
     <el-table v-loading="loading" :data="records" border stripe empty-text="暂无数据" data-test="table">
-      <el-table-column type="index" label="#" width="60" />
+      <el-table-column type="index" label="#" width="60" :index="(i) => (page - 1) * size + i + 1" />
       <el-table-column v-for="c in config.columns" :key="c.prop" :prop="c.prop" :label="c.label" :width="c.width">
         <template v-if="c.type === 'status'" #default="{ row }">
-          <el-tag :type="row.status === 0 ? 'info' : 'success'">{{ statusText(row.status) }}</el-tag>
+          <el-tag :type="statusTag(row.status)">{{ statusText(row.status) }}</el-tag>
         </template>
+        <template v-else-if="c.type === 'datetime'" #default="{ row }">{{ formatDateTime(row[c.prop]) }}</template>
       </el-table-column>
     </el-table>
     <el-pagination
@@ -31,6 +32,7 @@
 import { computed, ref, watch } from 'vue'
 import { pageMdm } from '@/api/mdm'
 import { MDM_RESOURCES } from '@/config/mdm'
+import { formatDateTime } from '@/utils/format'
 
 const props = defineProps({ resource: { type: String, required: true } })
 const config = computed(() => MDM_RESOURCES[props.resource])
@@ -42,7 +44,9 @@ const size = ref(20)
 const keyword = ref('')
 const loading = ref(false)
 
-const statusText = (s) => (s === 0 ? '停用' : '启用')
+// 后端约定：1=启用，0=停用（默认 1）
+const statusText = (s) => (s === 1 ? '启用' : s === 0 ? '停用' : '-')
+const statusTag = (s) => (s === 1 ? 'success' : 'info')
 
 async function load() {
   loading.value = true
