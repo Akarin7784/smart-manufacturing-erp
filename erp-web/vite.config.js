@@ -17,11 +17,16 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': { target: process.env.VITE_PROXY_TARGET || 'http://localhost:8080', changeOrigin: true } }
   },
+  // vite preview（e2e 用）同样代理 /api 到后端
+  preview: {
+    proxy: { '/api': { target: process.env.VITE_PROXY_TARGET || 'http://localhost:8080', changeOrigin: true } }
+  },
   test: {
     environment: 'jsdom',
     globals: true,
     css: false,
     setupFiles: ['./tests/setup.js'],
+    exclude: ['**/node_modules/**', 'e2e/**'],
     server: { deps: { inline: ['element-plus'] } },
     coverage: {
       provider: 'v8',
