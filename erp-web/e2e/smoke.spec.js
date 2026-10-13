@@ -60,7 +60,10 @@ test.describe('主数据列表页', () => {
       const statuses = []
       page.on('request', (q) => { if (new URL(q.url()).pathname === l.api && q.method() === 'GET') reqs.push(q.url()) })
       page.on('response', async (s) => {
-        if (new URL(s.url()).pathname === l.api) statuses.push([s.status(), (await s.json()).code])
+        if (new URL(s.url()).pathname !== l.api) return
+        let code
+        try { code = (await s.json()).code } catch { code = 'non-json' }
+        statuses.push([s.status(), code])
       })
       await page.goto(l.path)
       await expect(page.locator('.el-table__body')).toContainText(l.demo)
@@ -73,14 +76,16 @@ test.describe('主数据列表页', () => {
 
 test.describe('只读用户（无 mdm:write）', () => {
   let user, token
+  // 用户和角色名带时间戳，每次运行唯一；CI 用的是 H2 内存库，每次都是全新的。
+  // TODO：如果改为连持久库（MySQL 等）运行，需要在 afterAll 里删除这里建的用户和角色，避免数据越积越多。
   test.beforeAll(async ({ request }) => {
     const admin = await apiLogin(request, ADMIN.u, ADMIN.p)
-    const roleCode = uniq('E2E_RO_')
+    const roleCode = `E2E_RO_${Date.now()}`
     const role = await api(request, 'POST', '/api/sys/roles', { token: admin, data: { code: roleCode, name: 'e2e 只读' } })
     expectCode(role, 200, 0)
     // 只读：不授予任何写权限点（主数据查询只需登录）
     expectCode(await api(request, 'PUT', `/api/sys/roles/${role.body.data.id}/permissions`, { token: admin, data: { ids: [] } }), 200, 0)
-    user = { u: uniq('e2e_ro_'), p: 'readonly123' }
+    user = { u: `e2e_ro_${Date.now()}`, p: 'readonly123' }
     const created = await api(request, 'POST', '/api/sys/users', {
       token: admin, data: { username: user.u, password: user.p, realName: 'e2e 只读', roleIds: [role.body.data.id] }
     })
@@ -124,10 +129,131 @@ test.describe('引用保护 40901（API）', () => {
   })
 })
 
-// TODO(#5)：主数据 CRUD 页面合入后去掉 skip，并按实际 data-test 选择器调整
-test.describe.skip('主数据 CRUD UI（等 #5 合入后启用）', () => {
-  test('新增物料 → 列表出现新编码', async () => {})
-  test('编辑物料 → PUT 请求体里的 code 和原来一致（编码不可改）', async () => {})
-  test('停用物料 → 状态显示“停用”', async () => {})
-  test('删除被引用的物料 → 界面提示 40901 文案“已被…引用，不能删除，只能停用”', async () => {})
-})
+// 主数据 CRUD 页面（#5）
+const CRUD = [
+  { res: 'materials', title: '物料', extra: { unit: '个' }, ref: 'po' },
+  { res: 'customers', title: '客户', extra: { contact: 'e2e' }, ref: 'receipt' },
+  { res: 'suppliers', title: '供应商', extra: { contact: 'e2e' }, ref: 'po' },
+  { res: 'warehouses', title: '仓库', extra: { address: 'e2e' }, ref: 'po' }
+]
+
+async function adminUi(page) {
+  await page.goto('/login')
+  await uiLogin(page, ADMIN.u, ADMIN.p)
+  await expect(page).toHaveURL(/\/mdm\/materials$/)
+}
+const rowOf = (page, code) => page.locator('.el-table__body tr').filter({ hasText: code })
+async function search(page, code) {
+  await page.locator('input[data-test=keyword]').fill(code)
+  await page.locator('[data-test=search]').click()
+  await expect(rowOf(page, code)).toHaveCount(1)
+}
+async function apiCreate(request, token, c, code) {
+  const r = await api(request, 'POST', `/api/mdm/${c.res}`, { token, data: { code, name: `e2e ${c.title}`, ...c.extra } })
+  expectCode(r, 200, 0)
+  return r.body.data.id
+}
+/** 让该主数据被单据引用：物料/供应商/仓库用一张草稿采购单，客户用一笔收款 */
+async function makeReferenced(request, token, c, id) {
+  if (c.ref === 'receipt') {
+    expectCode(await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'RECEIPT', partnerId: id, amount: 1 } }), 200, 0)
+    return
+  }
+  const ids = { supplierId: 1, warehouseId: 1, materialId: 1 }
+  if (c.res === 'materials') ids.materialId = id
+  if (c.res === 'suppliers') ids.supplierId = id
+  if (c.res === 'warehouses') ids.warehouseId = id
+  const po = await api(request, 'POST', '/api/purchase/orders', {
+    token, data: { supplierId: ids.supplierId, warehouseId: ids.warehouseId, items: [{ materialId: ids.materialId, qty: 1, price: 1 }] }
+  })
+  expectCode(po, 200, 0)
+}
+
+for (const c of CRUD) {
+  test.describe(`主数据 CRUD UI：${c.title}`, () => {
+    test('新增 → POST 200/0，列表出现新编码', async ({ page }) => {
+      await adminUi(page)
+      await page.goto(`/mdm/${c.res}`)
+      const code = uniq(`E2E-${c.res.slice(0, 3).toUpperCase()}-`)
+      await page.locator('[data-test=create]').click()
+      await page.locator('input[data-test=field-code]').fill(code)
+      await page.locator('input[data-test=field-name]').fill(`新增${c.title}`)
+      const resp = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/mdm/${c.res}` && r.request().method() === 'POST')
+      await page.locator('[data-test=save]').click()
+      const r = await resp
+      expect(r.status()).toBe(200)
+      expect((await r.json()).code).toBe(0)
+      await search(page, code)
+      await expect(rowOf(page, code)).toContainText(`新增${c.title}`)
+    })
+
+    test('编辑 → PUT 请求体带原编码，200/0，列表显示新名称', async ({ page, request }) => {
+      const token = await apiLogin(request, ADMIN.u, ADMIN.p)
+      const code = uniq(`E2E-ED-${c.res.slice(0, 3)}-`)
+      const id = await apiCreate(request, token, c, code)
+      await adminUi(page)
+      await page.goto(`/mdm/${c.res}`)
+      await search(page, code)
+      await rowOf(page, code).locator('[data-test=edit]').click()
+      await expect(page.locator('input[data-test=field-code]')).toBeDisabled()
+      const newName = `改名${Date.now()}`
+      await page.locator('input[data-test=field-name]').fill(newName)
+      const reqP = page.waitForRequest((q) => new URL(q.url()).pathname === `/api/mdm/${c.res}/${id}` && q.method() === 'PUT')
+      const resP = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/mdm/${c.res}/${id}` && r.request().method() === 'PUT')
+      await page.locator('[data-test=save]').click()
+      const body = (await reqP).postDataJSON()
+      expect(body.code).toBe(code)
+      expect(body.name).toBe(newName)
+      const r = await resP
+      expect(r.status()).toBe(200)
+      expect((await r.json()).code).toBe(0)
+      await expect(rowOf(page, code)).toContainText(newName)
+    })
+
+    test('停用 → 200/0，刷新后状态仍为“停用”', async ({ page, request }) => {
+      const token = await apiLogin(request, ADMIN.u, ADMIN.p)
+      const code = uniq(`E2E-DS-${c.res.slice(0, 3)}-`)
+      const id = await apiCreate(request, token, c, code)
+      await adminUi(page)
+      await page.goto(`/mdm/${c.res}`)
+      await search(page, code)
+      await expect(rowOf(page, code)).toContainText('启用')
+      await rowOf(page, code).locator('[data-test=edit]').click()
+      await page.locator('[data-test=field-status]').getByText('停用').click()
+      const resP = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/mdm/${c.res}/${id}` && r.request().method() === 'PUT')
+      await page.locator('[data-test=save]').click()
+      const r = await resP
+      expect(r.status()).toBe(200)
+      expect((await r.json()).code).toBe(0)
+      await page.reload()
+      await search(page, code)
+      await expect(rowOf(page, code)).toContainText('停用')
+      const g = await api(request, 'GET', `/api/mdm/${c.res}/${id}`, { token })
+      expectCode(g, 200, 0)
+      expect(g.body.data.status).toBe(0)
+    })
+
+    test('删除被引用的数据 → 409/40901，提示只出现一次，行仍在', async ({ page, request }) => {
+      const token = await apiLogin(request, ADMIN.u, ADMIN.p)
+      const code = uniq(`E2E-RF-${c.res.slice(0, 3)}-`)
+      const id = await apiCreate(request, token, c, code)
+      await makeReferenced(request, token, c, id)
+      await adminUi(page)
+      await page.goto(`/mdm/${c.res}`)
+      await search(page, code)
+      await rowOf(page, code).locator('[data-test=delete]').click()
+      const resP = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/mdm/${c.res}/${id}` && r.request().method() === 'DELETE')
+      await page.locator('.el-message-box').getByRole('button', { name: '删除' }).click()
+      const r = await resP
+      expect(r.status()).toBe(409)
+      expect((await r.json()).code).toBe(40901)
+      const msg = page.locator('.el-message').filter({ hasText: '该数据已被单据引用，不能删除，可改为停用' })
+      await expect(msg).toHaveCount(1)
+      await page.waitForTimeout(500)
+      await expect(msg).toHaveCount(1)
+      await expect(page.locator('.el-message--success')).toHaveCount(0)
+      await expect(rowOf(page, code)).toHaveCount(1)
+      expectCode(await api(request, 'GET', `/api/mdm/${c.res}/${id}`, { token }), 200, 0)
+    })
+  })
+}
