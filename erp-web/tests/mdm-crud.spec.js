@@ -118,6 +118,28 @@ describe('业务错误（页面不再重复提示）', () => {
   })
 })
 
+describe('编辑 PUT 携带原编码（四类主数据）', () => {
+  it.each([
+    ['materials', { id: 1, code: 'M001', name: '物料', spec: 's', unit: 'u', category: 'c', status: 1 }],
+    ['customers', { id: 2, code: 'C001', name: '客户', contact: '张三', phone: '138', status: 1 }],
+    ['suppliers', { id: 3, code: 'S001', name: '供应商', contact: '李四', phone: '139', status: 1 }],
+    ['warehouses', { id: 4, code: 'W001', name: '仓库', address: '浦东', status: 1 }]
+  ])('%s：code 原样提交，即使表单值被篡改', async (resource, row) => {
+    updateMdm.mockImplementation(ok)
+    const w = mount(MdmFormDialog, { props: { modelValue: true, resource, row }, global: { plugins: [setup()] }, attachTo: document.body })
+    await flushPromises()
+    w.vm.form.name = row.name + '-改'
+    w.vm.form.status = 0
+    w.vm.form.code = 'HACKED'
+    await w.vm.onSave(); await flushPromises()
+    const [r, id, body] = updateMdm.mock.calls[0]
+    expect([r, id]).toEqual([resource, row.id])
+    expect(body.code).toBe(row.code)
+    expect(body.name).toBe(row.name + '-改')
+    expect(body.status).toBe(0)
+  })
+})
+
 describe('MdmFormDialog', () => {
   it('编码提示：新增说明不可重复（含已删除），编辑说明不可修改', async () => {
     mountForm(); await flushPromises()
@@ -156,7 +178,7 @@ describe('MdmFormDialog', () => {
     expect(document.querySelector('input[data-test=field-code]').disabled).toBe(true)
     w.vm.form.name = '新螺丝'
     await w.vm.onSave(); await flushPromises()
-    expect(updateMdm).toHaveBeenCalledWith('materials', 7, { name: '新螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 })
+    expect(updateMdm).toHaveBeenCalledWith('materials', 7, { code: 'M007', name: '新螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 })
   })
   it('保存失败（409/编码已存在）保持弹窗', async () => {
     createMdm.mockImplementation(fail)

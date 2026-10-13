@@ -60,7 +60,11 @@ watch(() => props.modelValue, (v) => v && reset(), { immediate: true })
 function payload() {
   const body = { status: form.status }
   for (const f of fields.value) {
-    if (isEdit.value && f.createOnly) continue
+    // 编码不可修改：编辑时原样提交原编码（后端更新接口要求 code 且必须与原值一致）
+    if (isEdit.value && f.createOnly) {
+      body[f.prop] = props.row[f.prop]
+      continue
+    }
     const v = typeof form[f.prop] === 'string' ? form[f.prop].trim() : form[f.prop]
     body[f.prop] = v === '' ? null : v
   }
