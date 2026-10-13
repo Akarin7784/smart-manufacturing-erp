@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -61,11 +64,12 @@ jobs:
         if: steps.detect.outputs.present == 'true' && hashFiles('erp-web/package-lock.json') == ''
         with:
           node-version: '22'
-      - name: Install & build
+      - name: Install, test & build
         if: steps.detect.outputs.present == 'true'
         working-directory: erp-web
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm test
           npm run build
 
   mysql-smoke:
