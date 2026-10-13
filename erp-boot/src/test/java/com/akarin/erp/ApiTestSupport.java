@@ -35,7 +35,7 @@ abstract class ApiTestSupport {
         JsonNode resp = om.readTree(s);
         int code = resp.path("code").asInt();
         // HTTP 状态必须与 body.code 一致
-        assertThat(res.getStatus()).as(method + " " + url + " http status vs body " + resp).isEqualTo(code == 0 ? 200 : code);
+        assertThat(res.getStatus()).as(method + " " + url + " http status vs body " + resp).isEqualTo(code == 0 ? 200 : code >= 10000 ? code / 100 : code);
         return resp;
     }
 

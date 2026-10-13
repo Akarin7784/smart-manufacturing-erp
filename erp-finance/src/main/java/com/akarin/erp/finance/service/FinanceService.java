@@ -2,6 +2,7 @@ package com.akarin.erp.finance.service;
 
 import com.akarin.erp.common.event.StockBizCompletedEvent;
 import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.common.util.Money;
 import com.akarin.erp.common.util.NoGenerator;
 import com.akarin.erp.finance.dto.PaymentCreateReq;
@@ -85,8 +86,8 @@ public class FinanceService {
     }
 
     /**
-     * 核销。幂等：同一 requestNo 且参数一致直接返回原结果，参数不一致返回 409。
-     * 并发：单据与收付款均带乐观锁，版本冲突整笔回滚并返回 409，由调用方重试。
+     * 核销。幂等：同一 requestNo 且参数一致直接返回原结果，参数不一致返回 409/40902。
+     * 并发：单据与收付款均带乐观锁，版本冲突整笔回滚并返回 409/40900，由调用方重试。
      */
     @Transactional
     public Settlement settle(SettleReq req) {
@@ -97,9 +98,9 @@ public class FinanceService {
         if (done != null) return idempotent(done, req);
 
         ArapBill bill = billMapper.selectById(req.billId());
-        if (bill == null) throw new BizException(404, "应收应付单不存在: " + req.billId());
+        if (bill == null) throw new BizException(ErrorCode.NOT_FOUND, "应收应付单不存在: " + req.billId());
         Payment pay = paymentMapper.selectById(req.paymentId());
-        if (pay == null) throw new BizException(404, "收付款不存在: " + req.paymentId());
+        if (pay == null) throw new BizException(ErrorCode.NOT_FOUND, "收付款不存在: " + req.paymentId());
         if (!Payment.billTypeOf(pay.getPaymentType()).equals(bill.getBillType()))
             throw new BizException("收付款类型与单据类型不匹配");
         if (!pay.getPartnerId().equals(bill.getPartnerId()))
@@ -108,7 +109,7 @@ public class FinanceService {
         bill.settle(amt);
         pay.apply(amt);
         if (billMapper.updateById(bill) != 1 || paymentMapper.updateById(pay) != 1)
-            throw new BizException(409, "数据已被并发修改，请重试");
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
 
         Settlement s = new Settlement();
         s.setRequestNo(req.requestNo());
@@ -118,7 +119,7 @@ public class FinanceService {
         try {
             settlementMapper.insert(s);
         } catch (DuplicateKeyException ex) {
-            throw new BizException(409, "重复的核销请求: " + req.requestNo());
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION, "重复的核销请求（并发提交）: " + req.requestNo());
         }
         return s;
     }
@@ -126,13 +127,13 @@ public class FinanceService {
     private Settlement idempotent(Settlement done, SettleReq req) {
         boolean same = done.getBillId().equals(req.billId()) && done.getPaymentId().equals(req.paymentId())
                 && Money.of(done.getAmount()).compareTo(Money.of(req.amount())) == 0;
-        if (!same) throw new BizException(409, "核销请求号已被使用且参数不一致: " + req.requestNo());
+        if (!same) throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "核销请求号已被使用且参数不一致: " + req.requestNo());
         return done;
     }
 
     public ArapBill requireBill(Long id) {
         ArapBill b = billMapper.selectById(id);
-        if (b == null) throw new BizException(404, "应收应付单不存在: " + id);
+        if (b == null) throw new BizException(ErrorCode.NOT_FOUND, "应收应付单不存在: " + id);
         return b;
     }
 

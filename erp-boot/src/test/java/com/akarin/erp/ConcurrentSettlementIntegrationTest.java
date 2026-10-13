@@ -1,5 +1,6 @@
 package com.akarin.erp;
 
+import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.finance.mapper.ArapBillMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.AfterEach;
@@ -99,7 +100,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
     }
 
     @RepeatedTest(5)
-    void differentRequestNos_overBalance_onlyOneSucceeds_other409() throws Exception {
+    void differentRequestNos_overBalance_onlyOneSucceeds_other40900() throws Exception {
         Ctx c = receivedPurchase("10", "10");                     // 应付 100.00
         long p1 = payment(c.supplierId(), "100"), p2 = payment(c.supplierId(), "100");
         gate = new CyclicBarrier(2); gateBillId = c.billId();
@@ -107,7 +108,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
                 settle(UUID.randomUUID().toString(), p1, c.billId(), "70"),
                 settle(UUID.randomUUID().toString(), p2, c.billId(), "60"));
         gate = null;
-        assertThat(codes).containsExactlyInAnyOrder(0, 409);
+        assertThat(codes).containsExactlyInAnyOrder(0, ErrorCode.CONCURRENT_MODIFICATION.getCode());
         BigDecimal expected = new BigDecimal(codes.get(0) == 0 ? "70" : "60");
         JsonNode bill = ok(t, "GET", "/api/finance/bills/" + c.billId(), null);
         assertThat(bill.path("settledAmount").decimalValue()).isEqualByComparingTo(expected);
@@ -128,7 +129,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         List<Integer> codes = race("/api/finance/settlements", body, body);
         gate = null;
         assertThat(codes).contains(0);
-        assertThat(codes).allMatch(x -> x == 0 || x == 409);
+        assertThat(codes).allMatch(x -> x == 0 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
         assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
         // 冲突方重放同一请求号 → 幂等返回成功，且不重复核销
@@ -144,7 +145,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         long poId = po.path("id").asLong();
         ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/purchase/orders/" + poId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
         List<Integer> r = race("/api/purchase/orders/" + poId + "/receive", "", "");
-        assertThat(r).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == 409);
+        assertThat(r).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + po.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
         assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("10");
 
@@ -153,7 +154,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         long soId = so.path("id").asLong();
         ok(t, "POST", "/api/workflow/approvals/" + ok(t, "POST", "/api/sales/orders/" + soId + "/submit", null).path("approvalId").asLong() + "/decide", "{\"approved\":true}");
         List<Integer> s = race("/api/sales/orders/" + soId + "/ship", "", "");
-        assertThat(s).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == 409);
+        assertThat(s).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + so.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
         assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("6");
     }

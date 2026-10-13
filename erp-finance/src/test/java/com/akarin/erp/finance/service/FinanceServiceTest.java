@@ -2,6 +2,7 @@ package com.akarin.erp.finance.service;
 
 import com.akarin.erp.common.event.StockBizCompletedEvent;
 import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.finance.dto.PaymentCreateReq;
 import com.akarin.erp.finance.dto.SettleReq;
 import com.akarin.erp.finance.entity.ArapBill;
@@ -140,7 +141,7 @@ class FinanceServiceTest {
         done.setRequestNo("R1"); done.setBillId(10L); done.setPaymentId(20L); done.setAmount(new BigDecimal("40"));
         when(settlementMapper.selectOne(any())).thenReturn(done);
         assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("41"))))
-                .isInstanceOf(BizException.class).extracting("code").isEqualTo(409);
+                .isInstanceOf(BizException.class).extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
     }
 
     @Test void concurrentDuplicateInsertConflicts() {
@@ -148,7 +149,7 @@ class FinanceServiceTest {
         when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "100"));
         when(settlementMapper.insert(any(Settlement.class))).thenThrow(new DuplicateKeyException("dup"));
         assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE)))
-                .isInstanceOf(BizException.class).extracting("code").isEqualTo(409);
+                .isInstanceOf(BizException.class).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
     }
 
     @Test void optimisticLockConflict() {
@@ -156,7 +157,7 @@ class FinanceServiceTest {
         when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "100"));
         when(billMapper.updateById(any(ArapBill.class))).thenReturn(0);
         assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE)))
-                .isInstanceOf(BizException.class).extracting("code").isEqualTo(409);
+                .isInstanceOf(BizException.class).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
         verify(settlementMapper, never()).insert(any(Settlement.class));
     }
 
@@ -192,15 +193,15 @@ class FinanceServiceTest {
         when(billMapper.selectById(10L)).thenReturn(bill(ArapBill.AP, 3, "100"));
         when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "100"));
         when(paymentMapper.updateById(any(Payment.class))).thenReturn(0);
-        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
     }
 
     @Test void idempotencyComparesBillAndPayment() {
         Settlement done = new Settlement();
         done.setRequestNo("R1"); done.setBillId(10L); done.setPaymentId(20L); done.setAmount(BigDecimal.ONE);
         when(settlementMapper.selectOne(any())).thenReturn(done);
-        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 11L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
-        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 21L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(409);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 11L, BigDecimal.ONE))).extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 21L, 10L, BigDecimal.ONE))).extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
     }
 
     @Test void registerPaymentKeepsGivenDate() {

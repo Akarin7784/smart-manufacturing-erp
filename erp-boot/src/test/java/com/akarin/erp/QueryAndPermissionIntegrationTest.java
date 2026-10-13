@@ -64,7 +64,8 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         assertThat(ok(admin, "GET", "/api/mdm/customers?keyword=DM-C", null).path("total").asInt()).isEqualTo(3);
         assertThat(ok(admin, "GET", "/api/mdm/suppliers?keyword=DM-S", null).path("total").asInt()).isEqualTo(3);
         assertThat(ok(admin, "GET", "/api/mdm/warehouses?keyword=DM-W", null).path("total").asInt()).isEqualTo(3);
-        assertThat(code(admin, "POST", "/api/mdm/materials", "{\"code\":\"DM-M001\",\"name\":\"dup\"}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/mdm/materials", "{\"code\":\"DM-M001\",\"name\":\"dup\"}")).isEqualTo(40001);
+        assertThat(call(admin, "POST", "/api/mdm/materials", "{\"code\":\"DM-M001\",\"name\":\"dup\"}").path("msg").asText()).startsWith("编码已存在");
     }
 
     @Test void validationAndNotFound() throws Exception {

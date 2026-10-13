@@ -4,6 +4,7 @@ import com.akarin.erp.auth.entity.SysUser;
 import com.akarin.erp.auth.mapper.SysUserMapper;
 import com.akarin.erp.auth.security.JwtTokenProvider;
 import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -21,8 +22,8 @@ public class AuthService {
 
     public String login(String username, String password) {
         SysUser u = userMapper.selectOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, username));
-        if (u == null || !encoder.matches(password, u.getPassword())) throw new BizException(401, "用户名或密码错误");
-        if (u.getStatus() != null && u.getStatus() == 0) throw new BizException(403, "账号已停用");
+        if (u == null || !encoder.matches(password, u.getPassword())) throw new BizException(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
+        if (u.getStatus() != null && u.getStatus() == 0) throw new BizException(ErrorCode.FORBIDDEN, "账号已停用");
         List<String> auth = new ArrayList<>(userMapper.selectPermissionCodes(u.getId()));
         userMapper.selectRoleCodes(u.getId()).forEach(r -> auth.add("ROLE_" + r));
         return tokens.create(u.getUsername(), auth);

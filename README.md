@@ -69,8 +69,24 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 
 ## 约定
 - 健康检查：`GET /actuator/health`，不需要登录，只暴露 health 端点。
-- 响应体统一为 `{code,msg,data}`；出错时 HTTP 状态和 `code` 一致（400 参数或业务错误、401 未登录、403 无权限、404 不存在、405、409 并发或重复冲突、500）。
+- 响应体统一为 `{code,msg,data}`；出错时 HTTP 状态表示大类，`code` 是细分码，见下方错误码表。
 - 金额参数要求 ≥0.01、最多 2 位小数；服务层先按 HALF_UP 四舍五入，再做校验。
+
+## 错误码
+响应体 `code` 是细分码，HTTP 状态是大类（定义在 `erp-common` 的 `ErrorCode` 枚举里）。通用错误的 `code` 就等于 HTTP 状态码；业务细分码按 HTTP 状态 × 100 + 序号编排。
+
+| HTTP 状态 | code | 含义 | 触发场景 |
+|---|---|---|---|
+| 400 | 400 | 参数或业务校验失败 | 所有接口的 `@Valid` 校验失败（例如 `POST /api/finance/settlements` 金额 <0.01 或超过 2 位小数），请求体格式错误、参数类型错误；业务规则不满足：`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 时订单状态不是 APPROVED，`POST /api/inventory/out` 或发货时库存不足，`POST /api/finance/settlements` 超额核销、核销已核销的单据、收付款类型或往来单位不匹配 |
+| 400 | 40001 | 编码已存在（msg 以"编码已存在"开头） | `POST /api/mdm/{materials,customers,suppliers,warehouses}` 时编码重复 |
+| 401 | 401 | 未登录或登录已失效 | 不带 token 或 token 无效时访问除 `/api/auth/login`、`/actuator/health` 以外的接口；`POST /api/auth/login` 用户名或密码错误 |
+| 403 | 403 | 无权限 | 缺少对应权限点，例如没有 `finance:read` 时调用 `GET /api/finance/*`，没有 `finance:write` 时调用 `POST /api/finance/payments`、`/settlements`；登录时账号已停用 |
+| 404 | 404 | 资源不存在 | 路径不存在；`GET /api/finance/bills/{id}` 查不到；核销时单据或收付款不存在 |
+| 405 | 405 | 请求方法不支持 | 例如 `PUT /api/finance/reconciliation` |
+| 409 | 40900 | 并发冲突（乐观锁或状态已变化） | `POST /api/finance/settlements` 时单据或收付款的版本冲突，或同一请求号被并发提交；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；数据库唯一键冲突 |
+| 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`（引用检查在 P2 实现） |
+| 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |
+| 500 | 500 | 系统异常 | 未预期的异常 |
 
 ## 财务闭环
 - 权限：查询类接口需要 `finance:read`，收付款登记和核销需要 `finance:write`（admin 已预置这两个权限）。

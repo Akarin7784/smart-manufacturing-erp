@@ -1,5 +1,6 @@
 package com.akarin.erp.auth.security;
 
+import com.akarin.erp.common.exception.ErrorCode;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,17 +27,17 @@ public class SecurityConfig {
                 .requestMatchers("/api/auth/login", "/h2-console/**", "/actuator/health").permitAll()
                 .anyRequest().authenticated())
             .exceptionHandling(e -> e
-                .authenticationEntryPoint((req, res, ex) -> writeJson(res, 401, "未登录或登录已失效"))
-                .accessDeniedHandler((req, res, ex) -> writeJson(res, 403, "无权限")))
+                .authenticationEntryPoint((req, res, ex) -> writeJson(res, ErrorCode.UNAUTHORIZED))
+                .accessDeniedHandler((req, res, ex) -> writeJson(res, ErrorCode.FORBIDDEN)))
             .addFilterBefore(new JwtAuthFilter(tokens), UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 
     /** 过滤器层的 401/403 也返回统一 JSON 体 {code,msg,data} */
-    static void writeJson(jakarta.servlet.http.HttpServletResponse res, int code, String msg) throws java.io.IOException {
-        res.setStatus(code);
+    static void writeJson(jakarta.servlet.http.HttpServletResponse res, ErrorCode ec) throws java.io.IOException {
+        res.setStatus(ec.getHttpStatus());
         res.setContentType("application/json;charset=UTF-8");
-        res.getWriter().write("{\"code\":" + code + ",\"msg\":\"" + msg + "\",\"data\":null}");
+        res.getWriter().write("{\"code\":" + ec.getCode() + ",\"msg\":\"" + ec.getDefaultMsg() + "\",\"data\":null}");
     }
 
     @Bean

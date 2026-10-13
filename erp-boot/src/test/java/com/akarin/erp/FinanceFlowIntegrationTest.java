@@ -84,8 +84,8 @@ class FinanceFlowIntegrationTest {
         // 幂等：同一请求号重放不重复核销
         ok("POST", "/api/finance/settlements", settleBody(r1, payId, billId, "20"));
         assertThat(ok("GET", "/api/finance/bills/" + billId, null).path("settledAmount").decimalValue()).isEqualByComparingTo("20");
-        // 同一请求号换参数 → 409
-        assertThat(call("POST", "/api/finance/settlements", settleBody(r1, payId, billId, "21"), true).path("code").asInt()).isEqualTo(409);
+        // 同一请求号换参数 → HTTP 409 / code 40902
+        assertThat(call("POST", "/api/finance/settlements", settleBody(r1, payId, billId, "21"), true).path("code").asInt()).isEqualTo(40902);
         // 超额核销被拒
         JsonNode over = call("POST", "/api/finance/settlements", settleBody(UUID.randomUUID().toString(), payId, billId, "31.02"), true);
         assertThat(over.path("code").asInt()).isEqualTo(400);

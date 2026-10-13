@@ -5,6 +5,7 @@ import com.akarin.erp.common.event.StockBizCompletedEvent;
 import com.akarin.erp.common.util.Money;
 import org.springframework.context.ApplicationEventPublisher;
 import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.common.util.NoGenerator;
 import com.akarin.erp.inventory.service.InventoryService;
 import com.akarin.erp.mdm.service.MaterialService;
@@ -98,10 +99,10 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         PurchaseOrderDetail d = detail(id);
         if (!"APPROVED".equals(d.order().getStatus()))
             throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
-        // 带状态条件的更新：并发重复收货时只有一个请求能把 APPROVED 改成 RECEIVED，其余返回 409
+        // 带状态条件的更新：并发重复收货时只有一个请求能把 APPROVED 改成 RECEIVED，其余返回 409/40900
         boolean moved = lambdaUpdate().set(PurchaseOrder::getStatus, "RECEIVED")
                 .eq(PurchaseOrder::getId, id).eq(PurchaseOrder::getStatus, "APPROVED").update();
-        if (!moved) throw new BizException(409, "单据状态已变化，请刷新后重试");
+        if (!moved) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION, "单据状态已变化，请刷新后重试");
         d.order().setStatus("RECEIVED");
         for (var it : d.items()) {
             inventoryService.stockIn(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
