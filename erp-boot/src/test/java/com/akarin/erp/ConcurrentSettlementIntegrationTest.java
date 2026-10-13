@@ -112,13 +112,13 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         assertThat(codes).containsExactlyInAnyOrder(0, ErrorCode.CONCURRENT_MODIFICATION.getCode());
         BigDecimal expected = new BigDecimal(codes.get(0) == 0 ? "70" : "60");
         JsonNode bill = ok(t, "GET", "/api/finance/bills/" + c.billId(), null);
-        assertThat(bill.path("settledAmount").decimalValue()).isEqualByComparingTo(expected);
+        assertThat(new java.math.BigDecimal(bill.path("settledAmount").asText())).isEqualByComparingTo(expected);
         assertThat(bill.path("status").asText()).isEqualTo("PARTIAL");
         assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
         // 失败那笔的付款单未被占用
         long loser = codes.get(0) == 0 ? p2 : p1;
         for (JsonNode p : ok(t, "GET", "/api/finance/payments?partnerId=" + c.supplierId(), null).path("records"))
-            if (p.path("id").asLong() == loser) assertThat(p.path("appliedAmount").decimalValue()).isEqualByComparingTo("0");
+            if (p.path("id").asLong() == loser) assertThat(new java.math.BigDecimal(p.path("appliedAmount").asText())).isEqualByComparingTo("0");
     }
 
     @RepeatedTest(5)
@@ -132,10 +132,10 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         assertThat(codes).contains(0);
         assertThat(codes).allMatch(x -> x == 0 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
-        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+        assertThat(new java.math.BigDecimal(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").asText())).isEqualByComparingTo("30");
         // 冲突方重放同一请求号 → 幂等返回成功，且不重复核销
         assertThat(code(t, "POST", "/api/finance/settlements", body)).isZero();
-        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+        assertThat(new java.math.BigDecimal(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").asText())).isEqualByComparingTo("30");
     }
 
     @RepeatedTest(3)
@@ -173,7 +173,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         assertThat(results).allSatisfy(r -> assertThat(r.path("code").asInt()).as(r.toString()).isZero());
         assertThat(results.stream().map(r -> r.path("data").path("id").asLong()).distinct()).as("返回的是同一条核销记录").hasSize(1);
         assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
-        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+        assertThat(new java.math.BigDecimal(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").asText())).isEqualByComparingTo("30");
     }
 
     @RepeatedTest(3)
@@ -186,7 +186,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         List<Integer> r = race("/api/purchase/orders/" + poId + "/receive", "", "");
         assertThat(r).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + po.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
-        assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("10");
+        assertThat(new java.math.BigDecimal(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").asText())).isEqualByComparingTo("10");
 
         JsonNode so = ok(t, "POST", "/api/sales/orders", "{\"customerId\":" + cus + ",\"warehouseId\":" + wh +
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":4,\"price\":2}]}").path("order");
@@ -195,6 +195,6 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
         List<Integer> s = race("/api/sales/orders/" + soId + "/ship", "", "");
         assertThat(s).containsOnlyOnce(0).allMatch(x -> x == 0 || x == 400 || x == ErrorCode.CONCURRENT_MODIFICATION.getCode());
         assertThat(ok(t, "GET", "/api/finance/bills?sourceBizNo=" + so.path("orderNo").asText(), null).path("total").asInt()).isEqualTo(1);
-        assertThat(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("6");
+        assertThat(new java.math.BigDecimal(ok(t, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").asText())).isEqualByComparingTo("6");
     }
 }

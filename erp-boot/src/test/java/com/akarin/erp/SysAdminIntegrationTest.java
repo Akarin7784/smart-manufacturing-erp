@@ -33,7 +33,7 @@ class SysAdminIntegrationTest extends SysTestSupport {
         ok(admin, "PUT", "/api/sys/users/" + u.id() + "/roles", "{\"ids\":[" + writer.id() + "]}");
         assertThat(code(t, "GET", "/api/sys/users", null)).isEqualTo(401);
         String t2 = u.token(this);
-        assertThat(code(t2, "PUT", "/api/sys/users/" + u.id(), "{\"realName\":\"新名字\"}")).isZero();
+        assertThat(code(t2, "PUT", "/api/sys/users/" + u.id(), "{\"realName\":\"新名字\",\"version\":" + ver(t2, "/api/sys/users/" + u.id()) + "}")).isZero();
         assertThat(ok(admin, "GET", "/api/sys/users/" + u.id(), null).path("realName").asText()).isEqualTo("新名字");
 
         // 修改角色权限点同样使持有者 token 失效
@@ -114,12 +114,12 @@ class SysAdminIntegrationTest extends SysTestSupport {
         String rc = uniq("RU").toUpperCase(), pc = uniq("pu:x");
         long rid = ok(admin, "POST", "/api/sys/roles", "{\"code\":\"" + rc + "\",\"name\":\"a\"}").path("id").asLong();
         long pid = ok(admin, "POST", "/api/sys/permissions", "{\"code\":\"" + pc + "\",\"name\":\"a\"}").path("id").asLong();
-        assertThat(ok(admin, "PUT", "/api/sys/roles/" + rid, "{\"name\":\"b\"}").path("code").asText()).isEqualTo(rc);
-        assertThat(ok(admin, "PUT", "/api/sys/permissions/" + pid, "{\"name\":\"b\"}").path("code").asText()).isEqualTo(pc);
-        assertThat(code(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"" + rc + "\",\"name\":\"c\"}")).isZero();
-        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"" + pc + "\",\"name\":\"c\"}")).isZero();
-        assertThat(call(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"ZZ\",\"name\":\"d\"}").path("msg").asText()).isEqualTo("角色编码不可修改");
-        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"zz\",\"name\":\"d\"}")).isEqualTo(400);
+        assertThat(ok(admin, "PUT", "/api/sys/roles/" + rid, "{\"name\":\"b\",\"version\":" + ver(admin, "/api/sys/roles/" + rid) + "}").path("code").asText()).isEqualTo(rc);
+        assertThat(ok(admin, "PUT", "/api/sys/permissions/" + pid, "{\"name\":\"b\",\"version\":" + ver(admin, "/api/sys/permissions/" + pid) + "}").path("code").asText()).isEqualTo(pc);
+        assertThat(code(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"" + rc + "\",\"name\":\"c\",\"version\":" + ver(admin, "/api/sys/roles/" + rid) + "}")).isZero();
+        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"" + pc + "\",\"name\":\"c\",\"version\":" + ver(admin, "/api/sys/permissions/" + pid) + "}")).isZero();
+        assertThat(call(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"ZZ\",\"name\":\"d\",\"version\":" + ver(admin, "/api/sys/roles/" + rid) + "}").path("msg").asText()).isEqualTo("角色编码不可修改");
+        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"zz\",\"name\":\"d\",\"version\":" + ver(admin, "/api/sys/permissions/" + pid) + "}")).isEqualTo(400);
         assertThat(code(admin, "POST", "/api/sys/roles", "{\"name\":\"x\"}")).as("创建仍必填").isEqualTo(400);
         assertThat(code(admin, "POST", "/api/sys/permissions", "{\"name\":\"x\"}")).isEqualTo(400);
     }
@@ -167,8 +167,8 @@ class SysAdminIntegrationTest extends SysTestSupport {
         JsonNode p = ok(admin, "POST", "/api/sys/permissions", "{\"code\":\"" + pcode + "\",\"name\":\"演示\"}");
         long pid = p.path("id").asLong();
         assertThat(call(admin, "POST", "/api/sys/permissions", "{\"code\":\"" + pcode + "\",\"name\":\"x\"}").path("code").asInt()).isEqualTo(40001);
-        assertThat(ok(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"" + pcode + "\",\"name\":\"改名\"}").path("name").asText()).isEqualTo("改名");
-        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"other\",\"name\":\"x\"}")).isEqualTo(400);
+        assertThat(ok(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"" + pcode + "\",\"name\":\"改名\",\"version\":" + ver(admin, "/api/sys/permissions/" + pid) + "}").path("name").asText()).isEqualTo("改名");
+        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"other\",\"name\":\"x\",\"version\":" + ver(admin, "/api/sys/permissions/" + pid) + "}")).isEqualTo(400);
 
         Role r = role("CRUD");
         JsonNode rv = ok(admin, "PUT", "/api/sys/roles/" + r.id() + "/permissions", "{\"ids\":[" + pid + "]}");
@@ -180,8 +180,8 @@ class SysAdminIntegrationTest extends SysTestSupport {
         assertThat(badRole.path("msg").asText()).isEqualTo("角色不存在");
         assertThat(code(admin, "PUT", "/api/sys/users/999999/roles", "{\"ids\":[]}")).as("路径里的用户不存在").isEqualTo(404);
         assertThat(call(admin, "POST", "/api/sys/roles", "{\"code\":\"" + r.code() + "\",\"name\":\"x\"}").path("code").asInt()).isEqualTo(40001);
-        assertThat(ok(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"" + r.code() + "\",\"name\":\"新\"}").path("name").asText()).isEqualTo("新");
-        assertThat(code(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"ZZ\",\"name\":\"x\"}")).isEqualTo(400);
+        assertThat(ok(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"" + r.code() + "\",\"name\":\"新\",\"version\":" + ver(admin, "/api/sys/roles/" + r.id()) + "}").path("name").asText()).isEqualTo("新");
+        assertThat(code(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"ZZ\",\"name\":\"x\",\"version\":" + ver(admin, "/api/sys/roles/" + r.id()) + "}")).isEqualTo(400);
         assertThat(code(admin, "DELETE", "/api/sys/roles/1", null)).as("内置 ADMIN").isEqualTo(400);
 
         User holder = user(r);

@@ -31,7 +31,7 @@ public class PermissionAdminService {
         if (permissionMapper.countByCodeIncludingDeleted(req.code()) > 0)
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + req.code());
         SysPermission p = new SysPermission();
-        p.setCode(req.code()); p.setName(req.name());
+        p.setCode(req.code()); p.setName(req.name()); p.setVersion(0);
         try {
             permissionMapper.insert(p);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -44,8 +44,10 @@ public class PermissionAdminService {
     public SysPermission update(Long id, CodeNameReq req) {
         SysPermission p = require(id);
         if (req.code() != null && !p.getCode().equals(req.code())) throw new BizException("权限点编码不可修改");   // 不传 = 不改
+        com.akarin.erp.common.util.Versions.requirePresent(req.version());
         p.setName(req.name());
-        permissionMapper.updateById(p);
+        p.setVersion(req.version());
+        com.akarin.erp.common.util.Versions.requireUpdated(permissionMapper.updateById(p) == 1);
         return p;
     }
 

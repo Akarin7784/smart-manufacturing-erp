@@ -41,6 +41,15 @@ public final class Money {
         return null;
     }
 
+    /**
+     * 计算结果（行金额、合计）写入 DECIMAL(18,2) 前的上限检查：整数部分超过 16 位返回 400，而不是让数据库报错变成 500。
+     */
+    public static BigDecimal requireFitsAmountColumn(BigDecimal v, String label) {
+        String err = scaleError(v, 16, SCALE, label);
+        if (err != null) throw new BizException(err + "，超出金额上限");
+        return v;
+    }
+
     /** 行金额 = 数量 × 单价 */
     public static BigDecimal lineAmount(BigDecimal qty, BigDecimal price) {
         if (qty == null || price == null) throw new IllegalArgumentException("qty/price 不能为空");

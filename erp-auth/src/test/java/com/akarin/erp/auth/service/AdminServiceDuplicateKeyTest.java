@@ -46,7 +46,7 @@ class AdminServiceDuplicateKeyTest {
         when(roleMapper.countByCodeIncludingDeleted("OPS")).thenReturn(0L);
         when(roleMapper.insert(any(SysRole.class))).thenThrow(new DuplicateKeyException("uk_code"));
         var svc = new RoleAdminService(roleMapper, permissionMapper, mock(SysRolePermissionMapper.class), mock(SysUserRoleMapper.class), userMapper);
-        assertThatThrownBy(() -> svc.create(new CodeNameReq("OPS", "运维")))
+        assertThatThrownBy(() -> svc.create(new CodeNameReq("OPS", "运维", null)))
                 .isInstanceOf(BizException.class).hasMessageStartingWith("编码已存在")
                 .extracting("errorCode").isEqualTo(ErrorCode.CODE_DUPLICATED);
     }

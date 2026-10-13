@@ -26,10 +26,10 @@ class MdmRulesIntegrationTest extends SysTestSupport {
     @Test void codeImmutableAndValidation() throws Exception {
         String code = uniq("M");
         long id = ok(admin, "POST", "/api/mdm/materials", "{\"code\":\"" + code + "\",\"name\":\"螺丝\"}").path("id").asLong();
-        JsonNode r = call(admin, "PUT", "/api/mdm/materials/" + id, "{\"code\":\"OTHER\",\"name\":\"螺丝\"}");
+        JsonNode r = call(admin, "PUT", "/api/mdm/materials/" + id, "{\"code\":\"OTHER\",\"name\":\"螺丝\",\"version\":" + ver(admin, "/api/mdm/materials/" + id) + "}");
         assertThat(r.path("code").asInt()).isEqualTo(400);
         assertThat(r.path("msg").asText()).contains("编码不可修改");
-        assertThat(ok(admin, "PUT", "/api/mdm/materials/" + id, "{\"code\":\"" + code + "\",\"name\":\"新螺丝\",\"spec\":\"M6\"}").path("name").asText()).isEqualTo("新螺丝");
+        assertThat(ok(admin, "PUT", "/api/mdm/materials/" + id, "{\"code\":\"" + code + "\",\"name\":\"新螺丝\",\"spec\":\"M6\",\"version\":" + ver(admin, "/api/mdm/materials/" + id) + "}").path("name").asText()).isEqualTo("新螺丝");
 
         assertThat(code(admin, "POST", "/api/mdm/materials", "{\"code\":\"\",\"name\":\"x\"}")).isEqualTo(400);
         assertThat(code(admin, "POST", "/api/mdm/customers", "{\"code\":\"" + "C".repeat(65) + "\",\"name\":\"x\"}")).isEqualTo(400);
@@ -75,7 +75,7 @@ class MdmRulesIntegrationTest extends SysTestSupport {
 
         // 停用可以
         JsonNode m = ok(admin, "GET", "/api/mdm/materials/" + mat, null);
-        ok(admin, "PUT", "/api/mdm/materials/" + mat, "{\"code\":\"" + m.path("code").asText() + "\",\"name\":\"x\",\"status\":0}");
+        ok(admin, "PUT", "/api/mdm/materials/" + mat, "{\"code\":\"" + m.path("code").asText() + "\",\"name\":\"x\",\"status\":0,\"version\":" + ver(admin, "/api/mdm/materials/" + mat) + "}");
         assertThat(ok(admin, "GET", "/api/mdm/materials/" + mat, null).path("status").asInt()).isZero();
         assertThat(ok(admin, "GET", "/api/mdm/materials?status=0&keyword=" + m.path("code").asText(), null).path("total").asInt()).isEqualTo(1);
         // 未被引用的可直接删
@@ -99,13 +99,13 @@ class MdmRulesIntegrationTest extends SysTestSupport {
             String code = uniq("U");
             long id = ok(admin, "POST", "/api/mdm/" + path, "{\"code\":\"" + code + "\",\"name\":\"a\"}").path("id").asLong();
             // 不传 code = 不改
-            JsonNode r = ok(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"name\":\"b\"}");
+            JsonNode r = ok(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"name\":\"b\",\"version\":" + ver(admin, "/api/mdm/" + path + "/" + id) + "}");
             assertThat(r.path("code").asText()).as(path).isEqualTo(code);
             assertThat(r.path("name").asText()).isEqualTo("b");
             // 传相同 = 通过
-            assertThat(code(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"" + code + "\",\"name\":\"c\"}")).as(path).isZero();
+            assertThat(code(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"" + code + "\",\"name\":\"c\",\"version\":" + ver(admin, "/api/mdm/" + path + "/" + id) + "}")).as(path).isZero();
             // 传不同 = 400
-            JsonNode bad = call(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"OTHER\",\"name\":\"d\"}");
+            JsonNode bad = call(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"OTHER\",\"name\":\"d\",\"version\":" + ver(admin, "/api/mdm/" + path + "/" + id) + "}");
             assertThat(bad.path("code").asInt()).as(path).isEqualTo(400);
             assertThat(bad.path("msg").asText()).contains("编码不可修改");
             // 创建时 code 仍必填

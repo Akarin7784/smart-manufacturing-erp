@@ -70,7 +70,7 @@ class FinanceFlowIntegrationTest {
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":100,\"price\":0.5},{\"materialId\":" + mat + ",\"qty\":3,\"price\":0.335}]}").path("order");
         long orderId = order.path("id").asLong();
         String orderNo = order.path("orderNo").asText();
-        assertThat(order.path("totalAmount").decimalValue()).isEqualByComparingTo("51.01");
+        assertThat(new java.math.BigDecimal(order.path("totalAmount").asText())).isEqualByComparingTo("51.01");
         approveOrder("purchase", orderId);
         assertThat(ok("POST", "/api/purchase/orders/" + orderId + "/receive", null).path("order").path("status").asText()).isEqualTo("RECEIVED");
         // 重复收货被拒绝，不会生成第二张应付
@@ -79,7 +79,7 @@ class FinanceFlowIntegrationTest {
         JsonNode bill = billBySource(orderNo);
         assertThat(bill.path("billType").asText()).isEqualTo("AP");
         assertThat(bill.path("partnerId").asLong()).isEqualTo(sup);
-        assertThat(bill.path("amount").decimalValue()).isEqualByComparingTo("51.01");
+        assertThat(new java.math.BigDecimal(bill.path("amount").asText())).isEqualByComparingTo("51.01");
         assertThat(bill.path("status").asText()).isEqualTo("OPEN");
         long billId = bill.path("id").asLong();
 
@@ -89,7 +89,7 @@ class FinanceFlowIntegrationTest {
         assertThat(ok("GET", "/api/finance/bills/" + billId, null).path("status").asText()).isEqualTo("PARTIAL");
         // 幂等：同一请求号重放不重复核销
         ok("POST", "/api/finance/settlements", settleBody(r1, payId, billId, "20"));
-        assertThat(ok("GET", "/api/finance/bills/" + billId, null).path("settledAmount").decimalValue()).isEqualByComparingTo("20");
+        assertThat(new java.math.BigDecimal(ok("GET", "/api/finance/bills/" + billId, null).path("settledAmount").asText())).isEqualByComparingTo("20");
         // 同一请求号换参数 → HTTP 409 / code 40902
         assertThat(call("POST", "/api/finance/settlements", settleBody(r1, payId, billId, "21"), true).path("code").asInt()).isEqualTo(40902);
         // 超额核销被拒
@@ -101,9 +101,9 @@ class FinanceFlowIntegrationTest {
         assertThat(ok("GET", "/api/finance/settlements?billId=" + billId, null).path("total").asInt()).isEqualTo(2);
 
         JsonNode rec = ok("GET", "/api/finance/reconciliation?billType=AP&partnerId=" + sup, null).get(0);
-        assertThat(rec.path("totalAmount").decimalValue()).isEqualByComparingTo("51.01");
-        assertThat(rec.path("settledAmount").decimalValue()).isEqualByComparingTo("51.01");
-        assertThat(rec.path("balance").decimalValue()).isEqualByComparingTo("0");
+        assertThat(new java.math.BigDecimal(rec.path("totalAmount").asText())).isEqualByComparingTo("51.01");
+        assertThat(new java.math.BigDecimal(rec.path("settledAmount").asText())).isEqualByComparingTo("51.01");
+        assertThat(new java.math.BigDecimal(rec.path("balance").asText())).isEqualByComparingTo("0");
         assertThat(rec.path("billCount").asInt()).isEqualTo(1);
     }
 
@@ -129,11 +129,11 @@ class FinanceFlowIntegrationTest {
         approveOrder("sales", orderId);
         assertThat(ok("POST", "/api/sales/orders/" + orderId + "/ship", null).path("order").path("status").asText()).isEqualTo("SHIPPED");
         JsonNode stock = ok("GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0);
-        assertThat(stock.path("qty").decimalValue()).isEqualByComparingTo("6");
+        assertThat(new java.math.BigDecimal(stock.path("qty").asText())).isEqualByComparingTo("6");
 
         JsonNode bill = billBySource(order.path("orderNo").asText());
         assertThat(bill.path("billType").asText()).isEqualTo("AR");
-        assertThat(bill.path("amount").decimalValue()).isEqualByComparingTo("50");
+        assertThat(new java.math.BigDecimal(bill.path("amount").asText())).isEqualByComparingTo("50");
         long billId = bill.path("id").asLong();
 
         // 付款单不能核销应收
@@ -147,8 +147,8 @@ class FinanceFlowIntegrationTest {
         assertThat(call("POST", "/api/finance/settlements", settleBody(UUID.randomUUID().toString(), rc, billId, "1"), true).path("code").asInt()).isEqualTo(400);
 
         JsonNode rec = ok("GET", "/api/finance/reconciliation?billType=AR&partnerId=" + cus, null).get(0);
-        assertThat(rec.path("balance").decimalValue()).isEqualByComparingTo("0");
-        assertThat(ok("GET", "/api/finance/payments?partnerId=" + cus, null).path("records").get(0).path("appliedAmount").decimalValue()).isEqualByComparingTo("50");
+        assertThat(new java.math.BigDecimal(rec.path("balance").asText())).isEqualByComparingTo("0");
+        assertThat(new java.math.BigDecimal(ok("GET", "/api/finance/payments?partnerId=" + cus, null).path("records").get(0).path("appliedAmount").asText())).isEqualByComparingTo("50");
     }
 
     @Test void financeEndpointsRequireAuth() throws Exception {

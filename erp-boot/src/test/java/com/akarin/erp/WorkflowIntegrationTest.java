@@ -105,7 +105,7 @@ class WorkflowIntegrationTest extends SysTestSupport {
 
         assertThat(ok(bt, "POST", "/api/purchase/orders/" + o.id() + "/receive", null).path("order").path("status").asText()).isEqualTo("RECEIVED");
         JsonNode stock = ok(bt, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0);
-        assertThat(stock.path("qty").decimalValue()).isEqualByComparingTo("5");
+        assertThat(new java.math.BigDecimal(stock.path("qty").asText())).isEqualByComparingTo("5");
     }
 
     @Test void amountAboveThresholdAddsGmNode() throws Exception {
@@ -202,7 +202,7 @@ class WorkflowIntegrationTest extends SysTestSupport {
     @Test void definitionAdmin() throws Exception {
         JsonNode def = ok(admin, "GET", "/api/workflow/definitions/PURCHASE_ORDER", null);
         assertThat(def.path("nodes").size()).isEqualTo(3);
-        assertThat(def.path("nodes").get(2).path("minAmount").decimalValue()).isEqualByComparingTo("1000");
+        assertThat(new java.math.BigDecimal(def.path("nodes").get(2).path("minAmount").asText())).isEqualByComparingTo("1000");
         assertThat(ok(admin, "GET", "/api/workflow/definitions", null).size()).isPositive();
         assertThat(code(buyer.token(this), "GET", "/api/workflow/definitions", null)).isEqualTo(403);
         assertThat(code(admin, "PUT", "/api/workflow/definitions/X", "{\"name\":\"x\",\"nodes\":[{\"name\":\"n\",\"roleCode\":\"R\",\"approveMode\":\"BAD\"}]}")).isEqualTo(400);

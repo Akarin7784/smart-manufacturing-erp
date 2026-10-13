@@ -43,9 +43,29 @@ public class GlobalExceptionHandler {
                 || d.getAnnotation() instanceof com.akarin.erp.common.validation.MoneyScale;
     }
 
-    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
-            MissingServletRequestParameterException.class})
+    @ExceptionHandler({MethodArgumentTypeMismatchException.class, MissingServletRequestParameterException.class})
     public ResponseEntity<R<Void>> badRequest(Exception e) { return of(ErrorCode.BAD_REQUEST, "请求格式错误"); }
+
+    /** 请求体无法解析。字段类型不对（如金额传了 "abc"）时提示带上字段名 */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<R<Void>> unreadable(HttpMessageNotReadableException e) {
+        if (e.getCause() instanceof com.fasterxml.jackson.databind.exc.MismatchedInputException mi && !mi.getPath().isEmpty()) {
+            String field = fieldPath(mi.getPath());
+            Class<?> t = mi.getTargetType();
+            String what = t != null && (Number.class.isAssignableFrom(t) || t.isPrimitive() && t != boolean.class) ? "必须是数字" : "格式不正确";
+            return of(ErrorCode.BAD_REQUEST, field + " " + what);
+        }
+        return of(ErrorCode.BAD_REQUEST, "请求格式错误");
+    }
+
+    static String fieldPath(java.util.List<com.fasterxml.jackson.databind.JsonMappingException.Reference> path) {
+        StringBuilder sb = new StringBuilder();
+        for (var r : path) {
+            if (r.getFieldName() != null) sb.append(sb.length() == 0 ? "" : ".").append(r.getFieldName());
+            else if (r.getIndex() >= 0) sb.append('[').append(r.getIndex()).append(']');
+        }
+        return sb.toString();
+    }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<R<Void>> denied(AccessDeniedException e) { return of(ErrorCode.FORBIDDEN, ErrorCode.FORBIDDEN.getDefaultMsg()); }

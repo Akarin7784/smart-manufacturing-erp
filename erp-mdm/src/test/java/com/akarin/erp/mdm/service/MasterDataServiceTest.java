@@ -63,11 +63,21 @@ class MasterDataServiceTest {
 
     @Test void codeIsImmutable() {
         when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
-        assertThatThrownBy(() -> svc.update(1L, m(null, "B"))).hasMessageContaining("编码不可修改");
-        Material patch = m(null, null); patch.setName("new");
+        Material other = m(null, "B"); other.setVersion(0);
+        assertThatThrownBy(() -> svc.update(1L, other)).hasMessageContaining("编码不可修改");
+        Material patch = m(null, null); patch.setName("new"); patch.setVersion(0);
         svc.update(1L, patch);
         assertThat(patch.getCode()).isEqualTo("A");
         verify(mapper).updateById(patch);
+    }
+
+    @Test void updateRequiresVersionAndMapsStaleTo40900() {
+        when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
+        assertThatThrownBy(() -> svc.update(1L, m(null, null))).hasMessageStartingWith("version 不能为空")
+                .extracting("errorCode").isEqualTo(ErrorCode.BAD_REQUEST);
+        when(mapper.updateById(any(Material.class))).thenReturn(0);
+        Material stale = m(null, null); stale.setVersion(3);
+        assertThatThrownBy(() -> svc.update(1L, stale)).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
     }
 
     @Test void referencedCannotBeDeleted() {

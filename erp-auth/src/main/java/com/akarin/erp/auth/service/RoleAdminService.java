@@ -29,7 +29,7 @@ public class RoleAdminService {
     private final SysUserRoleMapper userRoleMapper;
     private final SysUserMapper userMapper;
 
-    public record RoleView(Long id, String code, String name, List<Long> permissionIds) {}
+    public record RoleView(Long id, String code, String name, List<Long> permissionIds, Integer version) {}
 
     public List<RoleView> list() {
         return roleMapper.selectList(new LambdaQueryWrapper<SysRole>().orderByAsc(SysRole::getId)).stream().map(this::view).toList();
@@ -42,7 +42,7 @@ public class RoleAdminService {
         if (roleMapper.countByCodeIncludingDeleted(req.code()) > 0)
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + req.code());
         SysRole r = new SysRole();
-        r.setCode(req.code()); r.setName(req.name());
+        r.setCode(req.code()); r.setName(req.name()); r.setVersion(0);
         try {
             roleMapper.insert(r);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -55,8 +55,10 @@ public class RoleAdminService {
     public RoleView update(Long id, CodeNameReq req) {
         SysRole r = require(id);
         if (req.code() != null && !r.getCode().equals(req.code())) throw new BizException("角色编码不可修改");   // 不传 = 不改
+        com.akarin.erp.common.util.Versions.requirePresent(req.version());
         r.setName(req.name());
-        roleMapper.updateById(r);
+        r.setVersion(req.version());
+        com.akarin.erp.common.util.Versions.requireUpdated(roleMapper.updateById(r) == 1);
         return view(r);
     }
 
@@ -93,6 +95,6 @@ public class RoleAdminService {
     private RoleView view(SysRole r) {
         List<Long> pids = rolePermissionMapper.selectList(new LambdaQueryWrapper<SysRolePermission>()
                 .eq(SysRolePermission::getRoleId, r.getId())).stream().map(SysRolePermission::getPermissionId).sorted().toList();
-        return new RoleView(r.getId(), r.getCode(), r.getName(), pids);
+        return new RoleView(r.getId(), r.getCode(), r.getName(), pids, r.getVersion());
     }
 }

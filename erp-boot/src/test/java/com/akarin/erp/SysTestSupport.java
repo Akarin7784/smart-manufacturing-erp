@@ -41,4 +41,15 @@ abstract class SysTestSupport extends ApiTestSupport {
                 "\",\"realName\":\"测试\",\"roleIds\":[" + ids + "]}").path("id").asLong();
         return new User(id, name);
     }
+
+    /** 查询当前 version（乐观锁），用于构造更新请求 */
+    long ver(String token, String url) throws Exception {
+        var m = java.util.regex.Pattern.compile("^/api/sys/permissions/(\\d+)$").matcher(url);
+        if (m.find()) {
+            for (JsonNode p : ok(token, "GET", "/api/sys/permissions", null))
+                if (p.path("id").asLong() == Long.parseLong(m.group(1))) return p.path("version").asLong();
+            throw new AssertionError("permission not found: " + url);
+        }
+        return ok(token, "GET", url, null).path("version").asLong();
+    }
 }

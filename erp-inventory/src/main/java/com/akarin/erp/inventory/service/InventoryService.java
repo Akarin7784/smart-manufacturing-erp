@@ -51,6 +51,8 @@ public class InventoryService {
             }
             BigDecimal after = "IN".equals(dir) ? s.getQty().add(qty) : s.getQty().subtract(qty);
             if (after.signum() < 0) throw new BizException("库存不足，当前可用: " + s.getQty());
+            String over = com.akarin.erp.common.util.Money.scaleError(after, 14, 4, "入库后库存数量");
+            if (over != null) throw new BizException(over + "，超出数量上限");
             s.setQty(after);
             if (stockMapper.updateById(s) == 1) {
                 StockTxn t = new StockTxn();

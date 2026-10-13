@@ -53,6 +53,7 @@ public class UserAdminService {
         u.setRealName(req.realName());
         u.setStatus(SysUser.ENABLED);
         u.setTokenVersion(0);
+        u.setVersion(0);
         try {
             userMapper.insert(u);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -65,8 +66,10 @@ public class UserAdminService {
     @Transactional
     public UserView update(Long id, UserReqs.Update req) {
         SysUser u = require(id);
+        com.akarin.erp.common.util.Versions.requirePresent(req.version());
         u.setRealName(req.realName());
-        userMapper.updateById(u);
+        u.setVersion(req.version());
+        com.akarin.erp.common.util.Versions.requireUpdated(userMapper.updateById(u) == 1);
         return view(u);
     }
 
@@ -140,6 +143,6 @@ public class UserAdminService {
 
     private UserView view(SysUser u) {
         return new UserView(u.getId(), u.getUsername(), u.getRealName(),
-                Objects.equals(u.getStatus(), SysUser.ENABLED), userMapper.selectRoleCodes(u.getId()));
+                Objects.equals(u.getStatus(), SysUser.ENABLED), userMapper.selectRoleCodes(u.getId()), u.getVersion());
     }
 }
