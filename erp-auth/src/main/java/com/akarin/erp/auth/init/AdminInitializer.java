@@ -27,8 +27,11 @@ public class AdminInitializer implements ApplicationRunner {
         if (admin != null && (admin.getPassword() == null || admin.getPassword().isEmpty())) {
             if (adminPassword == null || adminPassword.isBlank())
                 throw new IllegalStateException("admin 尚未设置密码：请通过环境变量 ERP_ADMIN_PASSWORD 或配置 erp.init.admin-password 提供初始密码");
-            admin.setPassword(encoder.encode(adminPassword));
-            userMapper.updateById(admin);
+            // 定向更新密码，不走乐观锁（启动初始化，不应受 version 影响）
+            int rows = userMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<SysUser>()
+                    .eq(SysUser::getId, admin.getId())
+                    .set(SysUser::getPassword, encoder.encode(adminPassword)));
+            if (rows != 1) throw new IllegalStateException("初始化 admin 密码失败");
             log.info("initialized admin password");
         }
     }

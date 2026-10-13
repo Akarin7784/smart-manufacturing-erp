@@ -69,7 +69,7 @@ public class RoleAdminService {
         userMapper.bumpTokenVersionByRole(id);
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getRoleId, id));
         rolePermissionMapper.delete(new LambdaQueryWrapper<SysRolePermission>().eq(SysRolePermission::getRoleId, id));
-        roleMapper.deleteById(id);
+        com.akarin.erp.common.util.Versions.requireOneRow(roleMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     /** 覆盖式分配权限点；持有该角色的用户需重新登录 */

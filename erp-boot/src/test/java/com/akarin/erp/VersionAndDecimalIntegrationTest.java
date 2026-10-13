@@ -53,6 +53,50 @@ class VersionAndDecimalIntegrationTest extends SysTestSupport {
         assertThat(ok(admin, "GET", "/api/sys/users/" + u.id(), null).path("realName").asText()).isEqualTo("b");
     }
 
+    @Test void disableAndResetPasswordTakeEffectEvenAfterRenameChangedVersion() throws Exception {
+        User u = user();
+        String url = "/api/sys/users/" + u.id();
+        String oldToken = u.token(this);
+        // 别人先改了姓名 → version 变了
+        long v = ver(admin, url);
+        ok(admin, "PUT", url, "{\"realName\":\"改名\",\"version\":" + v + "}");
+        // 改密（不带 version）仍然生效：新密码能登录，旧 token 失效
+        ok(admin, "PUT", url + "/password", "{\"password\":\"newpass123\"}");
+        assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"newpass123\"}")).isZero();
+        assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"" + PW + "\"}")).isEqualTo(401);
+        assertThat(code(oldToken, "GET", "/api/auth/me", null)).isEqualTo(401);
+        // 再改一次姓名，然后停用：停用真正生效，登录失败
+        ok(admin, "PUT", url, "{\"realName\":\"再改名\",\"version\":" + ver(admin, url) + "}");
+        JsonNode dis = ok(admin, "PUT", url + "/status", "{\"enabled\":false}");
+        assertThat(dis.path("enabled").asBoolean()).isFalse();
+        assertThat(ok(admin, "GET", url, null).path("enabled").asBoolean()).isFalse();
+        assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"newpass123\"}")).isEqualTo(403);
+        // 姓名没被这些安全操作覆盖，version 也没被改动
+        assertThat(ok(admin, "GET", url, null).path("realName").asText()).isEqualTo("再改名");
+        assertThat(ver(admin, url)).isEqualTo(v + 2);
+        // 重新启用后可以登录
+        ok(admin, "PUT", url + "/status", "{\"enabled\":true}");
+        assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"newpass123\"}")).isZero();
+    }
+
+    @Test void masterDataUpdateChecksExistenceBeforeVersion() throws Exception {
+        JsonNode r = call(admin, "PUT", "/api/mdm/materials/999999", "{\"name\":\"x\"}");
+        assertThat(r.path("code").asInt()).as("不存在优先返回 404，而不是缺 version 的 400").isEqualTo(404);
+        assertThat(code(admin, "PUT", "/api/sys/users/999999", "{\"realName\":\"x\"}")).isEqualTo(404);
+    }
+
+    @Test void softDeleteAfterRenameStillWorks() throws Exception {
+        long id = mdm(admin, "materials", "D");
+        String url = "/api/mdm/materials/" + id;
+        ok(admin, "PUT", url, "{\"name\":\"改\",\"version\":" + ver(admin, url) + "}");
+        ok(admin, "DELETE", url, null);
+        assertThat(code(admin, "GET", url, null)).isEqualTo(404);
+        Role r = role("DR");
+        ok(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"name\":\"改\",\"version\":" + ver(admin, "/api/sys/roles/" + r.id()) + "}");
+        ok(admin, "DELETE", "/api/sys/roles/" + r.id(), null);
+        assertThat(code(admin, "GET", "/api/sys/roles/" + r.id(), null)).isEqualTo(404);
+    }
+
     // ---------- B ----------
     @Test void bigDecimalIsStringAndRoundTripsExactly() throws Exception {
         long sup = mdm(admin, "suppliers", "S");

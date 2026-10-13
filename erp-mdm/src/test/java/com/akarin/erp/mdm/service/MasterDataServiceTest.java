@@ -71,6 +71,17 @@ class MasterDataServiceTest {
         verify(mapper).updateById(patch);
     }
 
+    @Test void updateMissingRecordIs404BeforeVersionCheck() {
+        assertThatThrownBy(() -> svc.update(42L, m(null, null))).extracting("errorCode").isEqualTo(ErrorCode.NOT_FOUND);
+    }
+
+    @Test void softDeleteMustAffectOneRow() {
+        when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
+        svc.setCheckers(List.of());
+        when(mapper.deleteById(1L)).thenReturn(0);
+        assertThatThrownBy(() -> svc.delete(1L)).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
+    }
+
     @Test void updateRequiresVersionAndMapsStaleTo40900() {
         when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
         assertThatThrownBy(() -> svc.update(1L, m(null, null))).hasMessageStartingWith("version 不能为空")

@@ -59,7 +59,7 @@ public class PermissionAdminService {
                 .eq(SysRolePermission::getPermissionId, id)).stream().map(SysRolePermission::getRoleId).toList();
         roleIds.forEach(userMapper::bumpTokenVersionByRole);
         rolePermissionMapper.delete(new LambdaQueryWrapper<SysRolePermission>().eq(SysRolePermission::getPermissionId, id));
-        permissionMapper.deleteById(id);
+        com.akarin.erp.common.util.Versions.requireOneRow(permissionMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     private SysPermission require(Long id) {

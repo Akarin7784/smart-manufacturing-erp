@@ -11,6 +11,11 @@ public final class Versions {
         if (version == null) throw new BizException(ErrorCode.BAD_REQUEST, "version 不能为空（请先查询详情拿到最新 version）");
     }
 
+    /** 定向更新 / 软删：影响行数必须正好是 1，否则说明记录已被删除或并发变化 → 409/40900，不能静默当成功 */
+    public static void requireOneRow(int rows) {
+        if (rows != 1) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+    }
+
     public static void requireUpdated(boolean updated) {
         if (!updated) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
     }
