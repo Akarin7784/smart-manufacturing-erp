@@ -3,6 +3,7 @@
     <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
       <el-form-item v-for="f in fields" :key="f.prop" :label="f.label" :prop="f.prop">
         <el-input v-model="form[f.prop]" :maxlength="f.max" :disabled="isEdit && f.createOnly" :data-test="`field-${f.prop}`" />
+        <div v-if="f.createOnly" class="field-hint" :data-test="`hint-${f.prop}`">{{ isEdit ? '编码创建后不可修改' : '编码保存后不可修改，且不能与已有（含已删除）编码重复' }}</div>
       </el-form-item>
       <el-form-item label="状态" prop="status">
         <el-radio-group v-model="form.status" data-test="field-status">
@@ -23,6 +24,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createMdm, updateMdm } from '@/api/mdm'
 import { MDM_FORMS, MDM_RESOURCES } from '@/config/mdm'
+import { createErrorText } from '@/utils/mdmErrors'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -72,12 +74,20 @@ async function onSave() {
   saving.value = true
   try {
     if (isEdit.value) await updateMdm(props.resource, props.row.id, payload())
-    else await createMdm(props.resource, payload())
+    else {
+      try {
+        // silent：由本组件给出更明确的提示（编码重复含已删除）
+        await createMdm(props.resource, payload(), { silent: true })
+      } catch (e) {
+        ElMessage.error(createErrorText(e))
+        throw e
+      }
+    }
     ElMessage.success('保存成功')
     emit('update:modelValue', false)
     emit('saved')
   } catch {
-    // 错误（含 403/409/编码已存在）已由拦截器提示，保留弹窗便于修改重试
+    // 错误已提示（新增由本组件提示；编辑由拦截器提示），保留弹窗便于修改重试
   } finally {
     saving.value = false
   }
@@ -85,3 +95,7 @@ async function onSave() {
 
 defineExpose({ form, onSave, payload })
 </script>
+
+<style scoped>
+.field-hint { font-size: 12px; color: #909399; line-height: 1.5; margin-top: 2px; }
+</style>

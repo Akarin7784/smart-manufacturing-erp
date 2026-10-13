@@ -6,11 +6,14 @@ import MdmFormDialog from '@/views/mdm/MdmFormDialog.vue'
 import { pageMdm, createMdm, updateMdm, deleteMdm } from '@/api/mdm'
 import { useAuthStore } from '@/stores/auth'
 import { MDM_FORMS } from '@/config/mdm'
+import { BizError } from '@/utils/request'
+import { DUP_CODE_MSG, REFERENCED_MSG, createErrorText, deleteErrorText } from '@/utils/mdmErrors'
 
 vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), createMdm: vi.fn(), updateMdm: vi.fn(), deleteMdm: vi.fn() }))
 
 const rows = [{ id: 7, code: 'M007', name: '螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 }]
 const ok = () => Promise.resolve({})
+const failWith = (err) => () => { const p = Promise.reject(err); p.catch(() => {}); return p }
 const fail = () => { const p = Promise.reject(new Error('x')); p.catch(() => {}); return p }
 
 function setup(authorities = ['mdm:write']) {
@@ -25,6 +28,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   pageMdm.mockResolvedValue({ records: rows, total: 1 })
   vi.spyOn(ElMessage, 'success').mockImplementation(() => {})
+  vi.spyOn(ElMessage, 'error').mockImplementation(() => {})
   document.body.innerHTML = ''
 })
 
@@ -60,7 +64,7 @@ describe('列表页新增/编辑/删除', () => {
     pageMdm.mockClear()
     await w.vm.onDelete(rows[0]); await flushPromises()
     expect(ElMessageBox.confirm.mock.calls[0][0]).toContain('螺丝')
-    expect(deleteMdm).toHaveBeenCalledWith('materials', 7)
+    expect(deleteMdm).toHaveBeenCalledWith('materials', 7, { silent: true })
     expect(pageMdm).toHaveBeenCalledTimes(1)
   })
   it('删除最后一条且非首页时回退一页', async () => {
@@ -94,7 +98,59 @@ describe('列表页新增/编辑/删除', () => {
   })
 })
 
+describe('业务错误提示', () => {
+  it('删除 409：提示改为停用，且只提示一次', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    deleteMdm.mockImplementation(failWith(new BizError(409, '数据已被他人修改，请刷新后重试')))
+    const w = mountList(); await flushPromises()
+    await w.vm.onDelete(rows[0]); await flushPromises()
+    expect(ElMessage.error).toHaveBeenCalledTimes(1)
+    expect(ElMessage.error).toHaveBeenCalledWith(REFERENCED_MSG)
+  })
+  it('删除其他错误显示原因', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
+    deleteMdm.mockImplementation(failWith(new BizError(403, '没有权限执行此操作')))
+    const w = mountList(); await flushPromises()
+    await w.vm.onDelete(rows[0]); await flushPromises()
+    expect(ElMessage.error).toHaveBeenCalledWith('没有权限执行此操作')
+  })
+  it('新增编码重复提示含已删除，弹窗保持', async () => {
+    createMdm.mockImplementation(failWith(new BizError(400, '编码已存在: M1')))
+    const w = mountForm(); await flushPromises()
+    Object.assign(w.vm.form, { code: 'M1', name: 'n' })
+    await w.vm.onSave(); await flushPromises()
+    expect(ElMessage.error).toHaveBeenCalledTimes(1)
+    expect(ElMessage.error).toHaveBeenCalledWith(DUP_CODE_MSG)
+    expect(w.emitted('saved')).toBeFalsy()
+  })
+  it('新增其他错误原样提示', async () => {
+    createMdm.mockImplementation(failWith(new BizError(403, '没有权限执行此操作')))
+    const w = mountForm(); await flushPromises()
+    Object.assign(w.vm.form, { code: 'M1', name: 'n' })
+    await w.vm.onSave(); await flushPromises()
+    expect(ElMessage.error).toHaveBeenCalledWith('没有权限执行此操作')
+  })
+  it('错误文案函数兜底', () => {
+    expect(createErrorText(undefined)).toBe('保存失败')
+    expect(deleteErrorText(undefined)).toBe('删除失败')
+    expect(deleteErrorText({ code: 409 })).toBe(REFERENCED_MSG)
+  })
+  it('真实拦截器 silent 下 409 不重复弹通用提示', async () => {
+    const { onRejected, MSG } = await import('@/utils/request')
+    setup()
+    await expect(onRejected({ config: { silent: true }, response: { status: 409, data: {} } })).rejects.toMatchObject({ code: 409 })
+    expect(ElMessage.error).not.toHaveBeenCalledWith(MSG.conflict)
+  })
+})
+
 describe('MdmFormDialog', () => {
+  it('编码提示：新增说明不可重复（含已删除），编辑说明不可修改', async () => {
+    mountForm(); await flushPromises()
+    expect(document.querySelector('[data-test=hint-code]').textContent).toContain('含已删除')
+    document.body.innerHTML = ''
+    mountForm({ row: rows[0] }); await flushPromises()
+    expect(document.querySelector('[data-test=hint-code]').textContent).toContain('不可修改')
+  })
   it('新增：标题、默认启用、必填校验阻止提交', async () => {
     const w = mountForm(); await flushPromises()
     expect(document.body.textContent).toContain('新增物料')
@@ -113,7 +169,7 @@ describe('MdmFormDialog', () => {
     const w = mountForm(); await flushPromises()
     Object.assign(w.vm.form, { code: ' M100 ', name: '垫片', spec: '', status: 0 })
     await w.vm.onSave(); await flushPromises()
-    expect(createMdm).toHaveBeenCalledWith('materials', { code: 'M100', name: '垫片', spec: null, unit: null, category: null, status: 0 })
+    expect(createMdm).toHaveBeenCalledWith('materials', { code: 'M100', name: '垫片', spec: null, unit: null, category: null, status: 0 }, { silent: true })
     expect(w.emitted('update:modelValue').at(-1)).toEqual([false])
     expect(w.emitted('saved')).toBeTruthy()
   })
