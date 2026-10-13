@@ -54,13 +54,13 @@ jobs:
       - uses: actions/setup-node@v4
         if: steps.detect.outputs.present == 'true' && hashFiles('erp-web/package-lock.json') != ''
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: erp-web/package-lock.json
       - uses: actions/setup-node@v4
         if: steps.detect.outputs.present == 'true' && hashFiles('erp-web/package-lock.json') == ''
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install & build
         if: steps.detect.outputs.present == 'true'
         working-directory: erp-web
