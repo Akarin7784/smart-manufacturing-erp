@@ -13,6 +13,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /** HTTP 状态码与 body.code 保持一致（400/401/403/404/409/500），body 统一 {code,msg,data} */
@@ -33,14 +34,15 @@ public class GlobalExceptionHandler {
         return of(400, fe == null ? "参数错误" : fe.getField() + " " + fe.getDefaultMessage());
     }
 
-    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class})
     public ResponseEntity<R<Void>> badRequest(Exception e) { return of(400, "请求格式错误"); }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<R<Void>> denied(AccessDeniedException e) { return of(403, "无权限"); }
 
-    @ExceptionHandler(NoResourceFoundException.class)
-    public ResponseEntity<R<Void>> notFound(NoResourceFoundException e) { return of(404, "资源不存在"); }
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<R<Void>> notFound(Exception e) { return of(404, "资源不存在"); }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<R<Void>> method(HttpRequestMethodNotSupportedException e) { return of(405, "请求方法不支持"); }

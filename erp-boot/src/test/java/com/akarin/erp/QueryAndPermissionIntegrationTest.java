@@ -48,6 +48,17 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         assertThat(r403).isEqualTo(om.readTree("{\"code\":403,\"msg\":\"无权限\",\"data\":null}"));
     }
 
+    @Test void actuatorHealthIsPublicAndNotFoundIsJson404() throws Exception {
+        var h = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/actuator/health")).andReturn().getResponse();
+        assertThat(h.getStatus()).isEqualTo(200);
+        assertThat(om.readTree(h.getContentAsString()).path("status").asText()).isEqualTo("UP");
+        // 只暴露 health
+        assertThat(code(admin, "GET", "/actuator/env", null)).isIn(401, 403, 404);
+        JsonNode nf = call(admin, "GET", "/api/definitely/not/here", null);   // call() 已断言 HTTP 状态 == body.code
+        assertThat(nf).isEqualTo(om.readTree("{\"code\":404,\"msg\":\"资源不存在\",\"data\":null}"));
+        assertThat(call(admin, "PUT", "/api/finance/reconciliation", null).path("code").asInt()).isEqualTo(405);
+    }
+
     @Test void demoMasterDataSeeded() throws Exception {
         assertThat(ok(admin, "GET", "/api/mdm/materials?keyword=DM-M", null).path("total").asInt()).isEqualTo(5);
         assertThat(ok(admin, "GET", "/api/mdm/customers?keyword=DM-C", null).path("total").asInt()).isEqualTo(3);

@@ -68,6 +68,7 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 - `GET /api/finance/reconciliation?billType=AR|AP&partnerId=` 对账汇总
 
 ## 约定
+- 健康检查：`GET /actuator/health`，不需要登录，只暴露 health 端点。
 - 响应体统一为 `{code,msg,data}`；出错时 HTTP 状态和 `code` 一致（400 参数或业务错误、401 未登录、403 无权限、404 不存在、405、409 并发或重复冲突、500）。
 - 金额参数要求 ≥0.01、最多 2 位小数；服务层先按 HALF_UP 四舍五入，再做校验。
 
