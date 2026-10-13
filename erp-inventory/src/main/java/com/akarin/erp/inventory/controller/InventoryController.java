@@ -26,7 +26,7 @@ public class InventoryController {
     private final StockTxnMapper txnMapper;
 
     public record StockReq(@NotNull Long materialId, @NotNull Long warehouseId,
-                           @NotNull @Positive BigDecimal qty, String remark) {}
+                           @NotNull(message = "数量不能为空", payload = com.akarin.erp.common.validation.FullMessage.class) @Positive(message = "数量必须大于 0", payload = com.akarin.erp.common.validation.FullMessage.class) @com.akarin.erp.common.validation.MoneyScale(label = "数量", integer = 14, fraction = 4) BigDecimal qty, String remark) {}
 
     @GetMapping("/stocks")
     public R<Page<Stock>> stocks(@RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "20") long size,

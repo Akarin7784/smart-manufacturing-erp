@@ -37,8 +37,8 @@ public class InventoryService {
     private StockTxn change(String dir, Long materialId, Long warehouseId, BigDecimal qty,
                             String bizType, String bizNo, String remark) {
         if (qty == null || qty.signum() <= 0) throw new BizException("数量必须大于 0");
-        materialService.require(materialId);
-        warehouseService.require(warehouseId);
+        materialService.requireRef(materialId);
+        warehouseService.requireRef(warehouseId);
         for (int i = 0; i < MAX_RETRY; i++) {
             Stock s = stockMapper.selectOne(new LambdaQueryWrapper<Stock>()
                     .eq(Stock::getMaterialId, materialId).eq(Stock::getWarehouseId, warehouseId));

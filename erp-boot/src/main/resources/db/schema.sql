@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS sys_user (
   real_name VARCHAR(64),
   status TINYINT DEFAULT 1,
   token_version INT NOT NULL DEFAULT 0,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -16,8 +16,8 @@ CREATE TABLE IF NOT EXISTS sys_role (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   code VARCHAR(64) NOT NULL UNIQUE,
   name VARCHAR(64),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS sys_permission (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   code VARCHAR(64) NOT NULL UNIQUE,
   name VARCHAR(64),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS mdm_material (
   unit VARCHAR(16),
   category VARCHAR(64),
   status TINYINT DEFAULT 1,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS mdm_customer (
   contact VARCHAR(64),
   phone VARCHAR(32),
   status TINYINT DEFAULT 1,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -65,8 +65,8 @@ CREATE TABLE IF NOT EXISTS mdm_supplier (
   contact VARCHAR(64),
   phone VARCHAR(32),
   status TINYINT DEFAULT 1,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -76,8 +76,8 @@ CREATE TABLE IF NOT EXISTS mdm_warehouse (
   name VARCHAR(128) NOT NULL,
   address VARCHAR(255),
   status TINYINT DEFAULT 1,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -97,8 +97,8 @@ CREATE TABLE IF NOT EXISTS wf_approval_instance (
   current_index INT NOT NULL DEFAULT 0,
   version INT NOT NULL DEFAULT 0,
   finished_at DATETIME,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -107,8 +107,8 @@ CREATE TABLE IF NOT EXISTS wf_process_def (
   biz_type VARCHAR(32) NOT NULL UNIQUE,
   name VARCHAR(64) NOT NULL,
   enabled TINYINT NOT NULL DEFAULT 1,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -120,8 +120,8 @@ CREATE TABLE IF NOT EXISTS wf_node_def (
   role_code VARCHAR(64) NOT NULL,
   approve_mode VARCHAR(8) NOT NULL,
   min_amount DECIMAL(18,2),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   INDEX idx_node_process (process_id, seq)
@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
   approver VARCHAR(64) NOT NULL,
   action VARCHAR(16) NOT NULL,
   comment VARCHAR(255),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   UNIQUE KEY uk_record_approver (instance_id, node_index, approver)
@@ -148,8 +148,8 @@ CREATE TABLE IF NOT EXISTS inv_stock (
   warehouse_id BIGINT NOT NULL,
   qty DECIMAL(18,4) NOT NULL DEFAULT 0,
   version INT NOT NULL DEFAULT 0,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   UNIQUE (material_id, warehouse_id)
@@ -165,8 +165,8 @@ CREATE TABLE IF NOT EXISTS inv_stock_txn (
   biz_type VARCHAR(32),
   biz_no VARCHAR(64),
   remark VARCHAR(255),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -179,8 +179,8 @@ CREATE TABLE IF NOT EXISTS pur_order (
   status VARCHAR(16) NOT NULL,
   total_amount DECIMAL(18,2) DEFAULT 0,
   remark VARCHAR(255),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -191,8 +191,8 @@ CREATE TABLE IF NOT EXISTS pur_order_item (
   qty DECIMAL(18,4) NOT NULL,
   price DECIMAL(18,4) NOT NULL,
   amount DECIMAL(18,2) NOT NULL,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -205,8 +205,8 @@ CREATE TABLE IF NOT EXISTS sal_order (
   status VARCHAR(16) NOT NULL,
   total_amount DECIMAL(18,2) DEFAULT 0,
   remark VARCHAR(255),
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -217,8 +217,8 @@ CREATE TABLE IF NOT EXISTS sal_order_item (
   qty DECIMAL(18,4) NOT NULL,
   price DECIMAL(18,4) NOT NULL,
   amount DECIMAL(18,2) NOT NULL,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
 );
@@ -235,8 +235,8 @@ CREATE TABLE IF NOT EXISTS fin_arap_bill (
   status VARCHAR(16) NOT NULL,
   due_date DATE,
   version INT NOT NULL DEFAULT 0,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   UNIQUE (source_biz_type, source_biz_no),
@@ -253,8 +253,8 @@ CREATE TABLE IF NOT EXISTS fin_payment (
   paid_date DATE,
   remark VARCHAR(255),
   version INT NOT NULL DEFAULT 0,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   INDEX idx_payment_partner (partner_id)
@@ -265,8 +265,8 @@ CREATE TABLE IF NOT EXISTS fin_settlement (
   payment_id BIGINT NOT NULL,
   bill_id BIGINT NOT NULL,
   amount DECIMAL(18,2) NOT NULL,
-  created_at DATETIME,
-  updated_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
   INDEX idx_settlement_bill (bill_id)

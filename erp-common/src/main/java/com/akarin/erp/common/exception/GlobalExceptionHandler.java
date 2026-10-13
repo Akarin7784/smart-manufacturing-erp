@@ -30,7 +30,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<R<Void>> valid(MethodArgumentNotValidException e) {
         var fe = e.getBindingResult().getFieldError();
-        return of(ErrorCode.BAD_REQUEST, fe == null ? ErrorCode.BAD_REQUEST.getDefaultMsg() : fe.getField() + " " + fe.getDefaultMessage());
+        if (fe == null) return of(ErrorCode.BAD_REQUEST, ErrorCode.BAD_REQUEST.getDefaultMsg());
+        String m = fe.getDefaultMessage() == null ? "" : fe.getDefaultMessage();
+        // 约束上显式标记了 FullMessage 的提示已自带字段名，原样返回；其余（框架默认提示等）前面加字段名
+        return of(ErrorCode.BAD_REQUEST, isFullMessage(fe) ? m : fe.getField() + " " + m);
+    }
+
+    static boolean isFullMessage(org.springframework.validation.FieldError fe) {
+        if (!fe.contains(jakarta.validation.ConstraintViolation.class)) return false;
+        var d = fe.unwrap(jakarta.validation.ConstraintViolation.class).getConstraintDescriptor();
+        return d.getPayload().contains(com.akarin.erp.common.validation.FullMessage.class)
+                || d.getAnnotation() instanceof com.akarin.erp.common.validation.MoneyScale;
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,

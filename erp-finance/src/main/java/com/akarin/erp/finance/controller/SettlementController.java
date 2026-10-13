@@ -42,8 +42,11 @@ public class SettlementController {
     public R<Settlement> settle(@Valid @RequestBody SettleReq req) {
         try {
             return R.ok(service.settle(req));
-        } catch (com.akarin.erp.finance.service.DuplicateRequestNoException e) {
-            return R.ok(service.replaySettlement(req));   // settle 的事务已回滚，按幂等规则重放
+        } catch (com.akarin.erp.common.exception.BizException e) {
+            // 请求号撞唯一索引或乐观锁冲突：settle 的事务已回滚，按请求号重新查一次。
+            // 已有成功记录：参数相同返回原结果，不同返回 40902；没有记录说明是别的请求号抢先，仍返回 40900。
+            if (e.getErrorCode() != com.akarin.erp.common.exception.ErrorCode.CONCURRENT_MODIFICATION) throw e;
+            return R.ok(service.replaySettlement(req, e));
         }
     }
 

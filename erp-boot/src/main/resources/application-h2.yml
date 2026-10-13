@@ -10,3 +10,7 @@ spring:
     init:
       # H2 额外加载演示主数据；MySQL profile 只用 application.yml 里的 schema + data（admin/角色/权限）
       data-locations: classpath:db/data.sql,classpath:db/demo-data.sql
+erp:
+  init:
+    # H2 演示环境的默认初始密码
+    admin-password: ${ERP_ADMIN_PASSWORD:admin123}

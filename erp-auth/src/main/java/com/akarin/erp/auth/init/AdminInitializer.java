@@ -18,13 +18,15 @@ import org.springframework.stereotype.Component;
 public class AdminInitializer implements ApplicationRunner {
     private final SysUserMapper userMapper;
     private final PasswordEncoder encoder;
-    @Value("${erp.init.admin-password:admin123}")
+    @Value("${erp.init.admin-password:}")
     private String adminPassword;
 
     @Override
     public void run(ApplicationArguments args) {
         SysUser admin = userMapper.selectOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, "admin"));
         if (admin != null && (admin.getPassword() == null || admin.getPassword().isEmpty())) {
+            if (adminPassword == null || adminPassword.isBlank())
+                throw new IllegalStateException("admin 尚未设置密码：请通过环境变量 ERP_ADMIN_PASSWORD 或配置 erp.init.admin-password 提供初始密码");
             admin.setPassword(encoder.encode(adminPassword));
             userMapper.updateById(admin);
             log.info("initialized admin password");

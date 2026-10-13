@@ -32,8 +32,7 @@ public class Payment extends BaseEntity {
     }
 
     public void apply(BigDecimal amt) {
-        BigDecimal a = amt == null ? null : Money.of(amt);
-        if (a == null || a.signum() <= 0) throw new BizException("核销金额必须 ≥ 0.01");
+        BigDecimal a = Money.requireAmount(amt, "核销金额");
         if (a.compareTo(unapplied()) > 0)
             throw new BizException("超额核销：收付款未核销余额 " + unapplied() + "，本次 " + a);
         appliedAmount = Money.of(appliedAmount).add(a);

@@ -19,12 +19,15 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @EnableConfigurationProperties(JwtProperties.class)
 public class SecurityConfig {
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtTokenProvider tokens, UserTokenState tokenState) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtTokenProvider tokens, UserTokenState tokenState,
+            @org.springframework.beans.factory.annotation.Value("${spring.h2.console.enabled:false}") boolean h2Console) throws Exception {
+        // h2-console 只在 H2 profile 开启（application-h2.yml），其他 profile 下这个路径和普通接口一样需要登录
+        if (h2Console) http.authorizeHttpRequests(a -> a.requestMatchers("/h2-console/**").permitAll());
         http.csrf(AbstractHttpConfigurer::disable)
             .headers(h -> h.frameOptions(f -> f.sameOrigin()))
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
-                .requestMatchers("/api/auth/login", "/h2-console/**", "/actuator/health").permitAll()
+                .requestMatchers("/api/auth/login", "/actuator/health").permitAll()
                 .anyRequest().authenticated())
             .exceptionHandling(e -> e
                 .authenticationEntryPoint((req, res, ex) -> writeJson(res, ErrorCode.UNAUTHORIZED))

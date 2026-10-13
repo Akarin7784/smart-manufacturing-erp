@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** 请求号唯一索引冲突走幂等重放：参数相同返回原结果，不同返回 40902 */
@@ -24,13 +26,26 @@ class SettlementControllerTest {
     @Test void duplicateRequestNoSameParamsReturnsOriginal() {
         Settlement done = new Settlement();
         when(service.settle(req)).thenThrow(new DuplicateRequestNoException("R1"));
-        when(service.replaySettlement(req)).thenReturn(done);
+        when(service.replaySettlement(eq(req), any())).thenReturn(done);
         assertThat(c.settle(req).getData()).isSameAs(done);
+    }
+
+    @Test void optimisticLockConflictAlsoReplays() {
+        Settlement done = new Settlement();
+        when(service.settle(req)).thenThrow(new BizException(ErrorCode.CONCURRENT_MODIFICATION));
+        when(service.replaySettlement(eq(req), any())).thenReturn(done);
+        assertThat(c.settle(req).getData()).isSameAs(done);
+    }
+
+    @Test void otherBizErrorsAreNotReplayed() {
+        when(service.settle(req)).thenThrow(new BizException("超额核销"));
+        assertThatThrownBy(() -> c.settle(req)).hasMessage("超额核销");
+        verify(service, never()).replaySettlement(any(), any());
     }
 
     @Test void duplicateRequestNoDifferentParams40902() {
         when(service.settle(req)).thenThrow(new DuplicateRequestNoException("R1"));
-        when(service.replaySettlement(req)).thenThrow(new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED));
+        when(service.replaySettlement(eq(req), any())).thenThrow(new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED));
         assertThatThrownBy(() -> c.settle(req)).extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
     }
 }

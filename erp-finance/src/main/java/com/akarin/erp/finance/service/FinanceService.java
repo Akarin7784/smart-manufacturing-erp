@@ -68,10 +68,9 @@ public class FinanceService {
     @Transactional
     public Payment registerPayment(PaymentCreateReq req) {
         String billType = Payment.billTypeOf(req.paymentType());
-        if (ArapBill.AR.equals(billType)) customerService.require(req.partnerId());
-        else supplierService.require(req.partnerId());
-        BigDecimal amount = req.amount() == null ? null : Money.of(req.amount());
-        if (amount == null || amount.signum() <= 0) throw new BizException("收付款金额必须 ≥ 0.01");
+        if (ArapBill.AR.equals(billType)) customerService.requireRef(req.partnerId());
+        else supplierService.requireRef(req.partnerId());
+        BigDecimal amount = Money.requireAmount(req.amount(), "收付款金额");
         Payment p = new Payment();
         p.setPaymentNo(NoGenerator.next(Payment.RECEIPT.equals(req.paymentType()) ? "RC" : "PY"));
         p.setPaymentType(req.paymentType());
@@ -91,16 +90,15 @@ public class FinanceService {
      */
     @Transactional
     public Settlement settle(SettleReq req) {
-        BigDecimal amt = req.amount() == null ? null : Money.of(req.amount());
-        if (amt == null || amt.signum() <= 0) throw new BizException("核销金额必须 ≥ 0.01");
+        BigDecimal amt = Money.requireAmount(req.amount(), "核销金额");
         Settlement done = settlementMapper.selectOne(
                 new LambdaQueryWrapper<Settlement>().eq(Settlement::getRequestNo, req.requestNo()));
         if (done != null) return idempotent(done, req);
 
         ArapBill bill = billMapper.selectById(req.billId());
-        if (bill == null) throw new BizException(ErrorCode.NOT_FOUND, "应收应付单不存在: " + req.billId());
+        if (bill == null) throw new BizException(ErrorCode.BAD_REQUEST, "应收应付单不存在: " + req.billId());
         Payment pay = paymentMapper.selectById(req.paymentId());
-        if (pay == null) throw new BizException(ErrorCode.NOT_FOUND, "收付款不存在: " + req.paymentId());
+        if (pay == null) throw new BizException(ErrorCode.BAD_REQUEST, "收付款不存在: " + req.paymentId());
         if (!Payment.billTypeOf(pay.getPaymentType()).equals(bill.getBillType()))
             throw new BizException("收付款类型与单据类型不匹配");
         if (!pay.getPartnerId().equals(bill.getPartnerId()))
@@ -124,12 +122,12 @@ public class FinanceService {
         return s;
     }
 
-    /** 并发同号提交的失败方：在新事务里读取已提交的那条，参数相同返回原结果，不同返回 409/40902 */
+    /** 并发冲突（请求号撞唯一索引或乐观锁）的失败方：在新事务里读取已提交的那条，参数相同返回原结果，不同返回 409/40902 */
     @Transactional(readOnly = true)
-    public Settlement replaySettlement(SettleReq req) {
+    public Settlement replaySettlement(SettleReq req, BizException original) {
         Settlement done = settlementMapper.selectOne(
                 new LambdaQueryWrapper<Settlement>().eq(Settlement::getRequestNo, req.requestNo()));
-        if (done == null) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION);
+        if (done == null) throw original;
         return idempotent(done, req);
     }
 

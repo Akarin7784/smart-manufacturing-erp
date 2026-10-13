@@ -43,7 +43,7 @@ public class PermissionAdminService {
     @Transactional
     public SysPermission update(Long id, CodeNameReq req) {
         SysPermission p = require(id);
-        if (!p.getCode().equals(req.code())) throw new BizException("权限点编码不可修改");
+        if (req.code() != null && !p.getCode().equals(req.code())) throw new BizException("权限点编码不可修改");   // 不传 = 不改
         p.setName(req.name());
         permissionMapper.updateById(p);
         return p;

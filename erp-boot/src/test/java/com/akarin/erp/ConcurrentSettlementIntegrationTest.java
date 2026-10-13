@@ -139,6 +139,44 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
     }
 
     @RepeatedTest(3)
+    void sameRequestNoDifferentParamsConcurrently_loserGets40902() throws Exception {
+        Ctx c = receivedPurchase("10", "10");
+        long p = payment(c.supplierId(), "100");
+        String no = UUID.randomUUID().toString();
+        gate = new CyclicBarrier(2); gateBillId = c.billId();
+        List<Integer> codes = race("/api/finance/settlements", settle(no, p, c.billId(), "30"), settle(no, p, c.billId(), "20"));
+        gate = null;
+        assertThat(codes).containsExactlyInAnyOrder(0, ErrorCode.IDEMPOTENCY_KEY_REUSED.getCode());
+        assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
+    }
+
+    @RepeatedTest(3)
+    void sameRequestNoSameParams10Concurrent_allReturnSameResult_settledOnce() throws Exception {
+        Ctx c = receivedPurchase("10", "10");
+        long p = payment(c.supplierId(), "100");
+        String body = settle(UUID.randomUUID().toString(), p, c.billId(), "30");
+        int n = 10;
+        gate = new CyclicBarrier(n); gateBillId = c.billId();   // 10 个请求都读到同一版本单据后再继续，稳定触发乐观锁冲突
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        List<JsonNode> results = new ArrayList<>();
+        try {
+            CountDownLatch ready = new CountDownLatch(n), go = new CountDownLatch(1);
+            List<Future<JsonNode>> fs = new ArrayList<>();
+            for (int i = 0; i < n; i++) fs.add(pool.submit(() -> { ready.countDown(); go.await(); return call(t, "POST", "/api/finance/settlements", body); }));
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            go.countDown();
+            for (Future<JsonNode> f : fs) results.add(f.get(60, TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+            gate = null;
+        }
+        assertThat(results).allSatisfy(r -> assertThat(r.path("code").asInt()).as(r.toString()).isZero());
+        assertThat(results.stream().map(r -> r.path("data").path("id").asLong()).distinct()).as("返回的是同一条核销记录").hasSize(1);
+        assertThat(ok(t, "GET", "/api/finance/settlements?billId=" + c.billId(), null).path("total").asInt()).isEqualTo(1);
+        assertThat(ok(t, "GET", "/api/finance/bills/" + c.billId(), null).path("settledAmount").decimalValue()).isEqualByComparingTo("30");
+    }
+
+    @RepeatedTest(3)
     void concurrentDuplicateReceiveAndShip_noServerError() throws Exception {
         long mat = mdm(t, "materials", "M"), sup = mdm(t, "suppliers", "S"), cus = mdm(t, "customers", "C"), wh = mdm(t, "warehouses", "W");
         JsonNode po = ok(t, "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +

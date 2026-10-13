@@ -6,7 +6,9 @@ import com.akarin.erp.mdm.entity.Warehouse;
 import com.akarin.erp.mdm.service.WarehouseService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.akarin.erp.common.validation.OnCreate;
 import jakarta.validation.Valid;
+import org.springframework.validation.annotation.Validated;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
@@ -35,7 +37,7 @@ public class WarehouseController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('mdm:write')")
-    public R<Warehouse> create(@Valid @RequestBody WarehouseReq body) { return R.ok(service.create(body.toEntity())); }
+    public R<Warehouse> create(@Validated(OnCreate.class) @RequestBody WarehouseReq body) { return R.ok(service.create(body.toEntity())); }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('mdm:write')")

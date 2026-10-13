@@ -42,8 +42,8 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
 
     @Transactional
     public PurchaseOrderDetail create(PurchaseOrderCreateReq req) {
-        supplierService.require(req.supplierId());
-        warehouseService.require(req.warehouseId());
+        supplierService.requireRef(req.supplierId());
+        warehouseService.requireRef(req.warehouseId());
         PurchaseOrder o = new PurchaseOrder();
         o.setOrderNo(NoGenerator.next("PO"));
         o.setSupplierId(req.supplierId());
@@ -54,7 +54,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         save(o);
         BigDecimal total = BigDecimal.ZERO;
         for (var l : req.items()) {
-            materialService.require(l.materialId());
+            materialService.requireRef(l.materialId());
             PurchaseOrderItem it = new PurchaseOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
             it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));

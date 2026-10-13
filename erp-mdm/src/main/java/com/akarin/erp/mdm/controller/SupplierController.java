@@ -6,7 +6,9 @@ import com.akarin.erp.mdm.entity.Supplier;
 import com.akarin.erp.mdm.service.SupplierService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.akarin.erp.common.validation.OnCreate;
 import jakarta.validation.Valid;
+import org.springframework.validation.annotation.Validated;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
@@ -35,7 +37,7 @@ public class SupplierController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('mdm:write')")
-    public R<Supplier> create(@Valid @RequestBody SupplierReq body) { return R.ok(service.create(body.toEntity())); }
+    public R<Supplier> create(@Validated(OnCreate.class) @RequestBody SupplierReq body) { return R.ok(service.create(body.toEntity())); }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('mdm:write')")

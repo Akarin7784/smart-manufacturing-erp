@@ -36,7 +36,7 @@ SPRING_PROFILES_ACTIVE=mysql java -jar erp-boot/target/erp-boot-0.1.0-SNAPSHOT.j
 ```
 表结构与初始数据由 `erp-boot/src/main/resources/db/schema.sql`、`data.sql` 自动初始化。
 H2 profile 内置演示主数据（`db/demo-data.sql`，MySQL 不加载）：物料 5 条（DM-M001~005）、客户 / 供应商 / 仓库各 3 条（DM-C/S/W），id 从 1 开始，可以直接用于下面的演示。
-默认账号 `admin / admin123`（可用 `ERP_ADMIN_PASSWORD` 覆盖），JWT 密钥用 `ERP_JWT_SECRET` 覆盖。
+H2 profile 默认账号 `admin / admin123`（可用 `ERP_ADMIN_PASSWORD` 覆盖）。MySQL 等其他 profile 没有默认密码：首次启动必须通过环境变量 `ERP_ADMIN_PASSWORD` 或配置 `erp.init.admin-password` 提供 admin 初始密码，否则启动失败。H2 控制台只在 H2 profile 开启。JWT 密钥用 `ERP_JWT_SECRET` 覆盖。
 
 ## 演示：采购收货全流程
 ```bash
@@ -85,6 +85,7 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 - 会签名单在提交时冻结（`approver_snapshot`）：之后再加入该角色的人不能审批，离开该角色的人也不再算在名单里不影响已冻结的人数要求；申请人本人不进名单，某节点除申请人外没有可用审批人时提交返回 400。
 - 申请人不能审批自己的单据（admin 也一样），返回 403；自己的单据不出现在待办里。演示环境（H2）预置审批人 `approver / approver123`。
 - 同一人同一节点重复审批由唯一索引 `uk_record_approver` 兜底，并发重复提交只有一次生效，其余返回 409/40900 或 400。
+- 配置了审批节点时，ADMIN 不能代审：只有节点角色内（且在会签名单里）的用户能处理，ADMIN 不在其中也返回 403。
 - 没有配置流程或流程已停用时，兼容原来的单级审批：持有 `workflow:approve` 的用户（或 ADMIN）都能审批，同样不能审批自己的单据。
 - 流程配置需要 `workflow:admin`。
 
@@ -129,11 +130,14 @@ curl localhost:8080/api/workflow/approvals/todo -H "Authorization: Bearer $MGR_T
 ## 约定
 - 健康检查：`GET /actuator/health`，不需要登录，只暴露 health 端点。
 - 响应体统一为 `{code,msg,data}`；出错时 HTTP 状态表示大类，`code` 是细分码，见下方错误码表。
-- 金额参数要求 ≥0.01、最多 2 位小数；服务层先按 HALF_UP 四舍五入，再做校验。
+- 金额参数（收付款金额、核销金额、流程金额条件）要求整数部分最多 16 位、最多 2 位小数；数量和单价要求整数部分最多 14 位、最多 4 位小数。位数在去掉末尾的 0 之后计算：`1.230`、`1.2300`、`1.00` 都算 2 位以内，可以通过；`1.231` 返回 400。超出直接拒绝，不做四舍五入。接口层（`@MoneyScale`）和服务层（`Money.requireAmount`）用的是同一套规则（`Money.scaleError`）。收付款、核销金额还要求 ≥0.01。提示均为中文并带字段名，例如"核销金额最多 2 位小数"、"单价整数部分最多 14 位"。数量×单价这类计算结果才按 HALF_UP 保留 2 位。
+- 资源不存在：**路径**里的资源不存在返回 404（如 `GET /api/mdm/suppliers/999`、`GET /api/finance/bills/999`）；**请求体**里引用的对象不存在返回 400（如收付款的 `partnerId`、核销的 `billId`/`paymentId`、订单的 `supplierId`/`customerId`/`warehouseId`/`materialId`、出入库的物料和仓库），提示形如"供应商不存在: 999"。
+- 权限先于校验：写接口先判权限再绑定参数、做 `@Valid` 校验。没有权限的用户即使请求体缺字段，也返回 403 而不是 400。
+- 更新接口的编码字段：四类主数据、角色、权限点的 `PUT` 中 `code` 可选。不传表示不改，传相同的值可以通过，传不同的值返回 400（编码不可修改）。创建时 `code` 仍然必填。用户更新接口本来就不含用户名，不受影响。
 
 ## 系统管理的保护规则
 - `ROLE_ADMIN` 对所有 `hasAuthority` 校验放行：即使 ADMIN 角色的权限被清空，管理员也不会被锁在系统外。
-- 内置权限点（`data.sql` 预置的那些）不能删除，返回 400；ADMIN 角色不能删除。
+- 内置权限点（`data.sql` 预置的那些）不能删除，返回 400；ADMIN 角色不能删除；ADMIN 角色的权限不能修改或清空，返回 400（"ADMIN 角色权限不可修改"）。
 - 只有 ADMIN 能授予或收回 ADMIN 角色（包括创建用户时带上 ADMIN），其他人返回 403。
 
 ## 已有 MySQL 库的升级脚本
@@ -160,6 +164,11 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
   created_at DATETIME, updated_at DATETIME, created_by VARCHAR(64), deleted TINYINT DEFAULT 0,
   UNIQUE KEY uk_record_approver (instance_id, node_index, approver));
 ```
+主数据、单据等表的 `created_at` / `updated_at` 已加 `DEFAULT CURRENT_TIMESTAMP`（直接 SQL 插入的种子数据也有时间）；已有库可按需执行，例如：
+```sql
+ALTER TABLE mdm_material MODIFY created_at DATETIME DEFAULT CURRENT_TIMESTAMP, MODIFY updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
+-- mdm_customer / mdm_supplier / mdm_warehouse 等其他表同理
+```
 新的权限点（8 `sys:read`、9 `sys:write`、10 `workflow:admin`）由 `data.sql` 幂等插入，启动时自动补齐。
 
 ## 错误码
@@ -171,9 +180,9 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 | 400 | 40001 | 编码已存在（msg 以"编码已存在"开头） | `POST /api/mdm/{materials,customers,suppliers,warehouses}`、`POST /api/sys/{users,roles,permissions}` 时编码 / 用户名重复，**包括已逻辑删除的**；并发同编码创建撞唯一索引也返回这个码 |
 | 401 | 401 | 未登录或登录已失效 | 不带 token 或 token 无效时访问除 `/api/auth/login`、`/actuator/health` 以外的接口；`POST /api/auth/login` 用户名或密码错误 |
 | 403 | 403 | 无权限 | 缺少对应权限点，例如没有 `finance:read` 时调用 `GET /api/finance/*`，没有 `finance:write` 时调用 `POST /api/finance/payments`、`/settlements`；登录时账号已停用 |
-| 404 | 404 | 资源不存在 | 路径不存在；`GET /api/finance/bills/{id}` 查不到；核销时单据或收付款不存在 |
+| 404 | 404 | 资源不存在 | 路径不存在；路径里的资源查不到，例如 `GET /api/finance/bills/{id}`、`GET /api/mdm/*/{id}`（请求体里引用的对象不存在是 400） |
 | 405 | 405 | 请求方法不支持 | 例如 `PUT /api/finance/reconciliation` |
-| 409 | 40900 | 并发冲突（乐观锁或状态已变化） | `POST /api/finance/settlements` 时单据或收付款的版本冲突，或同一请求号被并发提交；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；数据库唯一键冲突 |
+| 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
 | 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`：被订单、库存、应收应付单、收付款引用 |
 | 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |
 | 500 | 500 | 系统异常 | 未预期的异常 |
@@ -184,7 +193,7 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 - 采购收货 / 销售发货完成后发布 `StockBizCompletedEvent`，财务同步监听（同一事务）生成 **应付 AP / 应收 AR**；金额 = Σ 数量×单价（BigDecimal，2 位，HALF_UP），按来源单号唯一，重复事件不重复生成。
 - 收付款：`PAYMENT` 付款（供应商）只能核销 AP，`RECEIPT` 收款（客户）只能核销 AR，往来单位必须一致。
 - 核销状态机：`OPEN 未核销 → PARTIAL 部分核销 → SETTLED 已核销`；核销金额不得超过单据余额，也不得超过收付款未核销余额。
-- 幂等：`requestNo` 唯一。同号同参数重放返回原结果；同号不同参数返回 409/40902。并发同号提交撞唯一索引时，失败方回滚后按同样规则重放（同参返回原结果，不同参 40902）。
+- 幂等：`requestNo` 唯一。同号同参数重放返回原结果；同号不同参数返回 409/40902。并发同号提交时，失败方（撞唯一索引或乐观锁冲突）回滚后按请求号重新查一次：已有成功记录且参数相同返回原结果，参数不同返回 40902；没有记录（是别的请求号抢先）才返回 40900。
 - 并发：应收应付单、收付款都有 `@Version` 乐观锁；冲突时整笔回滚返回 409，由调用方重试。
 
 ```bash
@@ -213,7 +222,7 @@ curl "localhost:8080/api/finance/reconciliation?billType=AR" -H "$A"
 
 ## 测试
 ```bash
-mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告
+mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率门禁（行、分支都不低于 80%，不达标构建失败）
 # 报告：erp-boot/target/site/jacoco-aggregate/index.html
 ```
 

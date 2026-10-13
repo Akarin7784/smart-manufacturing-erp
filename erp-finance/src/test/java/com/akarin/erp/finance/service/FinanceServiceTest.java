@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 class FinanceServiceTest {
+    static final BizException CONFLICT = new BizException(ErrorCode.CONCURRENT_MODIFICATION);
     static final Class<?>[] ENTITIES = {ArapBill.class, Payment.class, Settlement.class};
     @BeforeAll
     static void initMybatisLambdaCache() {
@@ -90,11 +91,11 @@ class FinanceServiceTest {
 
     @Test void registerPaymentValidatesPartner() {
         Payment p = svc.registerPayment(new PaymentCreateReq(Payment.PAYMENT, 3L, new BigDecimal("20"), null, "r"));
-        verify(supplierService).require(3L);
+        verify(supplierService).requireRef(3L);
         assertThat(p.getPaymentNo()).startsWith("PY");
         assertThat(p.getAppliedAmount()).isEqualByComparingTo("0");
         Payment r = svc.registerPayment(new PaymentCreateReq(Payment.RECEIPT, 4L, new BigDecimal("20"), null, null));
-        verify(customerService).require(4L);
+        verify(customerService).requireRef(4L);
         assertThat(r.getPaymentNo()).startsWith("RC");
     }
 
@@ -156,12 +157,12 @@ class FinanceServiceTest {
         Settlement done = new Settlement();
         done.setRequestNo("R1"); done.setBillId(10L); done.setPaymentId(20L); done.setAmount(new BigDecimal("5.00"));
         when(settlementMapper.selectOne(any())).thenReturn(done);
-        assertThat(svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("5")))).isSameAs(done);
-        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("6"))))
+        assertThat(svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("5")), CONFLICT)).isSameAs(done);
+        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("6")), CONFLICT))
                 .extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
         when(settlementMapper.selectOne(any())).thenReturn(null);
-        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, BigDecimal.ONE)))
-                .extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
+        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, BigDecimal.ONE), CONFLICT))
+                .as("没有成功记录：原样抛出原冲突").isSameAs(CONFLICT);
     }
 
     @Test void optimisticLockConflict() {
@@ -192,11 +193,12 @@ class FinanceServiceTest {
         verify(paymentMapper, never()).insert(any(Payment.class));
     }
 
-    @Test void settleAmountIsRoundedHalfUp() {
+    @Test void settleAmountMoreThanTwoDecimalsRejected() {
         ArapBill b = bill(ArapBill.AP, 3, "1");
         when(billMapper.selectById(10L)).thenReturn(b);
         when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "1"));
-        Settlement st = svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("0.125")));
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("0.125")))).hasMessage("核销金额最多 2 位小数");
+        Settlement st = svc.settle(new SettleReq("R1", 20L, 10L, new BigDecimal("0.130")));
         assertThat(st.getAmount()).isEqualTo(new BigDecimal("0.13"));
         assertThat(b.getSettledAmount()).isEqualByComparingTo("0.13");
     }
@@ -228,9 +230,9 @@ class FinanceServiceTest {
         assertThat(svc.requireBill(10L)).isSameAs(b);
     }
 
-    @Test void missingBillOrPayment() {
-        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(404);
+    @Test void missingBillOrPaymentInBodyIs400() {
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(400);
         when(billMapper.selectById(10L)).thenReturn(bill(ArapBill.AP, 3, "100"));
-        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(404);
+        assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE))).extracting("code").isEqualTo(400);
     }
 }

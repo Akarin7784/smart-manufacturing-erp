@@ -104,6 +104,7 @@ jobs:
           MYSQL_PORT: '3306'
           MYSQL_USER: erp
           MYSQL_PASSWORD: erp123
+          ERP_ADMIN_PASSWORD: ci-admin-Pw1
         run: |
           nohup java -jar erp-boot/target/erp-boot-*.jar > app.log 2>&1 &
           # 就绪探测：/actuator/health 免登录，返回 200 且 status=UP 即就绪
@@ -118,9 +119,13 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/mdm/materials)
           echo "unauthenticated status: $code"
           test "$code" = "401"
+          # h2-console 只在 H2 profile 开启，MySQL 下不放行
+          h2=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/h2-console/)
+          echo "h2-console status: $h2"
+          test "$h2" = "401"
       - name: Login smoke (admin via JWT)
         run: |
-          resp=$(curl -s -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}')
+          resp=$(curl -s -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"ci-admin-Pw1"}')
           echo "$resp" | head -c 120; echo
           echo "$resp" | grep -q '"token"'
           token=$(echo "$resp" | sed -E 's/.*"token":"([^"]+)".*/\1/')
