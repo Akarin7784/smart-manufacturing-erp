@@ -32,8 +32,14 @@ public class GlobalExceptionHandler {
         var fe = e.getBindingResult().getFieldError();
         if (fe == null) return of(ErrorCode.BAD_REQUEST, ErrorCode.BAD_REQUEST.getDefaultMsg());
         String m = fe.getDefaultMessage() == null ? "" : fe.getDefaultMessage();
-        // 自定义的中文提示已经带了字段名，原样返回；框架默认提示前面加字段名
-        return of(ErrorCode.BAD_REQUEST, m.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) ? m : fe.getField() + " " + m);
+        // 约束上显式标记了 FullMessage 的提示已自带字段名，原样返回；其余（框架默认提示等）前面加字段名
+        return of(ErrorCode.BAD_REQUEST, isFullMessage(fe) ? m : fe.getField() + " " + m);
+    }
+
+    static boolean isFullMessage(org.springframework.validation.FieldError fe) {
+        if (!fe.contains(jakarta.validation.ConstraintViolation.class)) return false;
+        return fe.unwrap(jakarta.validation.ConstraintViolation.class).getConstraintDescriptor().getPayload()
+                .contains(com.akarin.erp.common.validation.FullMessage.class);
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,

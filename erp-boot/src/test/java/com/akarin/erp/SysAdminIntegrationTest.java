@@ -158,7 +158,7 @@ class SysAdminIntegrationTest extends SysTestSupport {
         ok(admin, "DELETE", "/api/sys/users/" + u.id(), null);
         assertThat(call(admin, "POST", "/api/sys/users", body).path("code").asInt()).as("已删除用户名不可复用").isEqualTo(40001);
         assertThat(code(admin, "POST", "/api/sys/users", "{\"username\":\"bad name\",\"password\":\"" + PW + "\"}")).isEqualTo(400);
-        assertThat(code(admin, "POST", "/api/sys/users", "{\"username\":\"" + uniq("v") + "\",\"password\":\"" + PW + "\",\"roleIds\":[999999]}")).isEqualTo(404);
+        assertThat(code(admin, "POST", "/api/sys/users", "{\"username\":\"" + uniq("v") + "\",\"password\":\"" + PW + "\",\"roleIds\":[999999]}")).as("请求体引用的角色不存在").isEqualTo(400);
         assertThat(code(admin, "GET", "/api/sys/users/999999", null)).isEqualTo(404);
     }
 
@@ -173,7 +173,12 @@ class SysAdminIntegrationTest extends SysTestSupport {
         Role r = role("CRUD");
         JsonNode rv = ok(admin, "PUT", "/api/sys/roles/" + r.id() + "/permissions", "{\"ids\":[" + pid + "]}");
         assertThat(rv.path("permissionIds").get(0).asLong()).isEqualTo(pid);
-        assertThat(code(admin, "PUT", "/api/sys/roles/" + r.id() + "/permissions", "{\"ids\":[999999]}")).isEqualTo(404);
+        assertThat(code(admin, "PUT", "/api/sys/roles/" + r.id() + "/permissions", "{\"ids\":[999999]}")).as("请求体引用的权限点不存在").isEqualTo(400);
+        User target = user();
+        JsonNode badRole = call(admin, "PUT", "/api/sys/users/" + target.id() + "/roles", "{\"ids\":[999999]}");
+        assertThat(badRole.path("code").asInt()).as("请求体引用的角色不存在").isEqualTo(400);
+        assertThat(badRole.path("msg").asText()).isEqualTo("角色不存在");
+        assertThat(code(admin, "PUT", "/api/sys/users/999999/roles", "{\"ids\":[]}")).as("路径里的用户不存在").isEqualTo(404);
         assertThat(call(admin, "POST", "/api/sys/roles", "{\"code\":\"" + r.code() + "\",\"name\":\"x\"}").path("code").asInt()).isEqualTo(40001);
         assertThat(ok(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"" + r.code() + "\",\"name\":\"新\"}").path("name").asText()).isEqualTo("新");
         assertThat(code(admin, "PUT", "/api/sys/roles/" + r.id(), "{\"code\":\"ZZ\",\"name\":\"x\"}")).isEqualTo(400);

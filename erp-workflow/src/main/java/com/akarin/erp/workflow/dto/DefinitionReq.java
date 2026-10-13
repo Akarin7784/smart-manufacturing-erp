@@ -9,6 +9,6 @@ public record DefinitionReq(@NotBlank @Size(max = 64) String name, Boolean enabl
                             @NotEmpty @Valid List<Node> nodes) {
     public record Node(@NotBlank @Size(max = 64) String name,
                        @NotBlank @Size(max = 64) String roleCode,
-                       @NotBlank @Pattern(regexp = "ALL|ANY", message = "只能是 ALL（会签）或 ANY（或签）") String approveMode,
-                       @DecimalMin(value = "0", message = "金额条件不能为负数") BigDecimal minAmount) {}
+                       @NotBlank @Pattern(regexp = "ALL|ANY", message = "只能是 ALL（会签）或 ANY（或签）", payload = com.akarin.erp.common.validation.FullMessage.class) String approveMode,
+                       @DecimalMin(value = "0", message = "金额条件不能为负数", payload = com.akarin.erp.common.validation.FullMessage.class) BigDecimal minAmount) {}
 }

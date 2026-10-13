@@ -77,7 +77,7 @@ public class RoleAdminService {
         if (UserAdminService.ADMIN_ROLE.equals(r.getCode())) throw new BizException("ADMIN 角色权限不可修改");
         var ids = new LinkedHashSet<>(permissionIds);
         List<SysPermission> perms = ids.isEmpty() ? List.of() : permissionMapper.selectBatchIds(ids);
-        if (perms.size() != ids.size()) throw new BizException(ErrorCode.NOT_FOUND, "权限点不存在");
+        if (perms.size() != ids.size()) throw new BizException(ErrorCode.BAD_REQUEST, "权限点不存在");
         rolePermissionMapper.delete(new LambdaQueryWrapper<SysRolePermission>().eq(SysRolePermission::getRoleId, id));
         ids.forEach(pid -> rolePermissionMapper.insert(new SysRolePermission(id, pid)));
         userMapper.bumpTokenVersionByRole(id);

@@ -112,7 +112,7 @@ public class UserAdminService {
     private void replaceRoles(SysUser u, List<Long> roleIds) {
         var ids = new LinkedHashSet<>(roleIds);
         List<SysRole> roles = ids.isEmpty() ? List.of() : roleMapper.selectBatchIds(ids);
-        if (roles.size() != ids.size()) throw new BizException(ErrorCode.NOT_FOUND, "角色不存在");
+        if (roles.size() != ids.size()) throw new BizException(ErrorCode.BAD_REQUEST, "角色不存在");
         boolean keepsAdmin = roles.stream().anyMatch(r -> ADMIN_ROLE.equals(r.getCode()));
         boolean wasAdmin = userMapper.selectRoleCodes(u.getId()).contains(ADMIN_ROLE);
         if (keepsAdmin != wasAdmin && !SecurityUtils.currentAuthorities().contains("ROLE_" + ADMIN_ROLE))

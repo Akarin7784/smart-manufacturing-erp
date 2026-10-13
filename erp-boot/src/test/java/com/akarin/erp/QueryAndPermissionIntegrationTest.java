@@ -64,6 +64,13 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         }
     }
 
+    @Test void validationMessageFieldPrefixIsExplicit() throws Exception {
+        // 标记了 FullMessage：原样返回
+        assertThat(call(admin, "POST", "/api/sys/roles", "{\"code\":\"bad code\",\"name\":\"x\"}").path("msg").asText()).isEqualTo("编码只能包含字母、数字、_ : . -");
+        // 未标记（框架默认提示）：前面加字段名
+        assertThat(call(admin, "POST", "/api/mdm/materials", "{\"code\":\"" + java.util.UUID.randomUUID() + "\"}").path("msg").asText()).startsWith("name ");
+    }
+
     @Test void referencedObjectInBodyMissingIs400_pathResourceMissingIs404() throws Exception {
         JsonNode r = call(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":999999,\"amount\":1}");
         assertThat(r.path("code").asInt()).isEqualTo(400);

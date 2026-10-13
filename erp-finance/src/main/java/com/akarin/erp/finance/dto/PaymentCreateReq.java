@@ -8,4 +8,4 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 public record PaymentCreateReq(@NotBlank String paymentType, @NotNull Long partnerId,
-                               @NotNull(message = "收付款金额不能为空") @DecimalMin(value = "0.01", message = "收付款金额必须 ≥ 0.01") @Digits(integer = 16, fraction = 2, message = "收付款金额最多 2 位小数、16 位整数") BigDecimal amount, LocalDate paidDate, String remark) {}
+                               @NotNull(message = "收付款金额不能为空", payload = com.akarin.erp.common.validation.FullMessage.class) @DecimalMin(value = "0.01", message = "收付款金额必须 ≥ 0.01", payload = com.akarin.erp.common.validation.FullMessage.class) @Digits(integer = 16, fraction = 2, message = "收付款金额最多 2 位小数、16 位整数", payload = com.akarin.erp.common.validation.FullMessage.class) BigDecimal amount, LocalDate paidDate, String remark) {}

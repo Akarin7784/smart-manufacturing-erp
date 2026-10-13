@@ -1,5 +1,7 @@
 package com.akarin.erp.common.util;
 
+import com.akarin.erp.common.exception.BizException;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Collection;
@@ -18,9 +20,9 @@ public final class Money {
      * @param label 提示里的字段名，如"核销金额"
      */
     public static BigDecimal requireAmount(BigDecimal v, String label) {
-        if (v == null) throw new com.akarin.erp.common.exception.BizException(label + "不能为空");
-        if (v.stripTrailingZeros().scale() > SCALE) throw new com.akarin.erp.common.exception.BizException(label + "最多 2 位小数");
-        if (v.compareTo(new BigDecimal("0.01")) < 0) throw new com.akarin.erp.common.exception.BizException(label + "必须 ≥ 0.01");
+        if (v == null) throw new BizException(label + "不能为空");
+        if (v.stripTrailingZeros().scale() > SCALE) throw new BizException(label + "最多 2 位小数");
+        if (v.compareTo(new BigDecimal("0.01")) < 0) throw new BizException(label + "必须 ≥ 0.01");
         return v.setScale(SCALE, RoundingMode.UNNECESSARY);
     }
 

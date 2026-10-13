@@ -40,6 +40,7 @@
               </rule>
             </check>
           </jacoco:report>
+          <echo level="info" message="JaCoCo coverage gate: All coverage checks have been met (LINE &gt;= 0.80, BRANCH &gt;= 0.80)"/>
         </target></configuration></execution></executions>
       <dependencies><dependency><groupId>org.jacoco</groupId><artifactId>org.jacoco.ant</artifactId><version>0.8.12</version></dependency></dependencies>
     </plugin><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId><configuration><excludes><exclude><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId></exclude></excludes></configuration></plugin></plugins></build>

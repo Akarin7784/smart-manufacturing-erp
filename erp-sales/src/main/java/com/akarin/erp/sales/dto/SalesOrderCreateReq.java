@@ -10,5 +10,5 @@ import java.util.List;
 
 public record SalesOrderCreateReq(@NotNull Long customerId, @NotNull Long warehouseId, String remark,
                                   @NotEmpty @Valid List<Line> items) {
-    public record Line(@NotNull Long materialId, @NotNull(message = "数量不能为空") @Positive(message = "数量必须大于 0") BigDecimal qty, @NotNull(message = "单价不能为空") @PositiveOrZero(message = "单价不能为负数") BigDecimal price) {}
+    public record Line(@NotNull Long materialId, @NotNull(message = "数量不能为空", payload = com.akarin.erp.common.validation.FullMessage.class) @Positive(message = "数量必须大于 0", payload = com.akarin.erp.common.validation.FullMessage.class) BigDecimal qty, @NotNull(message = "单价不能为空", payload = com.akarin.erp.common.validation.FullMessage.class) @PositiveOrZero(message = "单价不能为负数", payload = com.akarin.erp.common.validation.FullMessage.class) BigDecimal price) {}
 }
