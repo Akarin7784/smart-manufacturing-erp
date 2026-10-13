@@ -1,6 +1,9 @@
 package com.akarin.erp.purchase.service;
 
 import com.akarin.erp.common.event.ApprovalFinishedEvent;
+import com.akarin.erp.common.event.StockBizCompletedEvent;
+import com.akarin.erp.common.util.Money;
+import org.springframework.context.ApplicationEventPublisher;
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.util.NoGenerator;
 import com.akarin.erp.inventory.service.InventoryService;
@@ -34,6 +37,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
     private final WarehouseService warehouseService;
     private final ApprovalService approvalService;
     private final InventoryService inventoryService;
+    private final ApplicationEventPublisher publisher;
 
     @Transactional
     public PurchaseOrderDetail create(PurchaseOrderCreateReq req) {
@@ -52,9 +56,9 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
             materialService.require(l.materialId());
             PurchaseOrderItem it = new PurchaseOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
-            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(l.qty().multiply(l.price()));
+            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));
             itemMapper.insert(it);
-            total = total.add(it.getAmount());
+            total = Money.of(total.add(it.getAmount()));
         }
         o.setTotalAmount(total);
         updateById(o);
@@ -100,6 +104,9 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         }
         d.order().setStatus("RECEIVED");
         updateById(d.order());
+        BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
+        publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.PURCHASE_RECEIPT,
+                d.order().getOrderNo(), d.order().getSupplierId(), amount));
         return d;
     }
 

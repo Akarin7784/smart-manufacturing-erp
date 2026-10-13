@@ -1,6 +1,9 @@
 package com.akarin.erp.sales.service;
 
 import com.akarin.erp.common.event.ApprovalFinishedEvent;
+import com.akarin.erp.common.event.StockBizCompletedEvent;
+import com.akarin.erp.common.util.Money;
+import org.springframework.context.ApplicationEventPublisher;
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.util.NoGenerator;
 import com.akarin.erp.inventory.service.InventoryService;
@@ -34,6 +37,7 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
     private final WarehouseService warehouseService;
     private final ApprovalService approvalService;
     private final InventoryService inventoryService;
+    private final ApplicationEventPublisher publisher;
 
     @Transactional
     public SalesOrderDetail create(SalesOrderCreateReq req) {
@@ -52,9 +56,9 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
             materialService.require(l.materialId());
             SalesOrderItem it = new SalesOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
-            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(l.qty().multiply(l.price()));
+            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));
             itemMapper.insert(it);
-            total = total.add(it.getAmount());
+            total = Money.of(total.add(it.getAmount()));
         }
         o.setTotalAmount(total);
         updateById(o);
@@ -100,6 +104,9 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
         }
         d.order().setStatus("SHIPPED");
         updateById(d.order());
+        BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
+        publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.SALES_SHIPMENT,
+                d.order().getOrderNo(), d.order().getCustomerId(), amount));
         return d;
     }
 

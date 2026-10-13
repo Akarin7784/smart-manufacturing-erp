@@ -16,7 +16,7 @@ Java 17 · Spring Boot 3.3 · Spring Security + JWT · MyBatis-Plus 3.5 · MySQL
 | erp-inventory | 即时库存 + 库存流水；乐观锁重试防并发超扣；手工出入库 |
 | erp-purchase | 采购订单：草稿 → 提交审批 → 已审批 → 收货入库 |
 | erp-sales | 销售订单：草稿 → 提交审批 → 已审批 → 发货出库 |
-| erp-finance | 应收/应付单骨架（实体与查询） |
+| erp-finance | 应收/应付自动生成、收付款登记、核销（部分核销/幂等/乐观锁）、往来对账 |
 | erp-boot | 启动模块，聚合所有模块，配置与 SQL 初始化脚本 |
 
 依赖方向：`common ← auth/mdm/workflow/finance ← inventory ← purchase/sales ← boot`。审批完成通过 `ApprovalFinishedEvent` 通知业务模块，workflow 不依赖任何业务模块。
@@ -61,7 +61,47 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 - `/api/sales/orders`：GET、POST、GET/{id}、POST/{id}/submit、POST/{id}/ship
 - `/api/workflow/approvals/pending`、`POST /api/workflow/approvals/{id}/decide`
 - `/api/inventory/stocks`、`/api/inventory/txns`、`POST /api/inventory/in`、`POST /api/inventory/out`
-- `/api/finance/bills`
+- `GET /api/finance/bills`（`billType`/`partnerId`/`status`/`sourceBizNo`）、`GET /api/finance/bills/{id}`
+- `POST /api/finance/payments` 收付款登记，`GET /api/finance/payments`
+- `POST /api/finance/settlements` 核销，`GET /api/finance/settlements?billId=`
+- `GET /api/finance/reconciliation?billType=AR|AP&partnerId=` 对账汇总
+
+## 财务闭环
+- 采购收货 / 销售发货完成后发布 `StockBizCompletedEvent`，财务同步监听（同一事务）生成 **应付 AP / 应收 AR**；金额 = Σ 数量×单价（BigDecimal，2 位，HALF_UP），按来源单号唯一，重复事件不重复生成。
+- 收付款：`PAYMENT` 付款（供应商）只能核销 AP，`RECEIPT` 收款（客户）只能核销 AR，往来单位必须一致。
+- 核销状态机：`OPEN 未核销 → PARTIAL 部分核销 → SETTLED 已核销`；核销金额不得超过单据余额，也不得超过收付款未核销余额。
+- 幂等：`requestNo` 唯一。同号同参数重放返回原结果；同号不同参数返回 409。
+- 并发：应收应付单、收付款都有 `@Version` 乐观锁；冲突时整笔回滚返回 409，由调用方重试。
+
+```bash
+# 接上面的采购演示（订单已收货），查应付并付款核销
+BILL=$(curl -s "localhost:8080/api/finance/bills?billType=AP" -H "$A" | jq .data.records[0].id)
+PAY=$(curl -s -XPOST localhost:8080/api/finance/payments -H "$H" -H "$A" \
+  -d '{"paymentType":"PAYMENT","partnerId":1,"amount":50}' | jq .data.id)
+curl -XPOST localhost:8080/api/finance/settlements -H "$H" -H "$A" \
+  -d "{\"requestNo\":\"req-001\",\"paymentId\":$PAY,\"billId\":$BILL,\"amount\":20}"   # PARTIAL
+curl -XPOST localhost:8080/api/finance/settlements -H "$H" -H "$A" \
+  -d "{\"requestNo\":\"req-002\",\"paymentId\":$PAY,\"billId\":$BILL,\"amount\":30}"   # SETTLED
+curl "localhost:8080/api/finance/reconciliation?billType=AP" -H "$A"
+
+# 销售：先入库，再下单→审批→发货→应收→收款核销
+curl -XPOST localhost:8080/api/mdm/customers -H "$H" -H "$A" -d '{"code":"C001","name":"客户A"}'
+curl -XPOST localhost:8080/api/sales/orders -H "$H" -H "$A" \
+  -d '{"customerId":1,"warehouseId":1,"items":[{"materialId":1,"qty":40,"price":1.2}]}'
+curl -XPOST localhost:8080/api/sales/orders/1/submit -H "$A"                  # 返回 approvalId，假设为 2
+curl -XPOST localhost:8080/api/workflow/approvals/2/decide -H "$H" -H "$A" -d '{"approved":true}'
+curl -XPOST localhost:8080/api/sales/orders/1/ship -H "$A"                    # 出库 + 生成 AR 48.00
+curl -XPOST localhost:8080/api/finance/payments -H "$H" -H "$A" -d '{"paymentType":"RECEIPT","partnerId":1,"amount":48}'
+curl -XPOST localhost:8080/api/finance/settlements -H "$H" -H "$A" \
+  -d '{"requestNo":"req-003","paymentId":2,"billId":2,"amount":48}'
+curl "localhost:8080/api/finance/reconciliation?billType=AR" -H "$A"
+```
+
+## 测试
+```bash
+mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告
+# 报告：erp-boot/target/site/jacoco-aggregate/index.html
+```
 
 ## 当前进度
 - [x] 多模块骨架、统一响应/异常、审计字段、逻辑删除、分页
@@ -69,9 +109,10 @@ curl localhost:8080/api/inventory/txns   -H "$A"
 - [x] 主数据 CRUD
 - [x] 采购/销售订单 + 单级审批 + 审批事件驱动状态
 - [x] 库存出入库、流水、乐观锁防超扣
+- [x] 财务闭环：自动应收应付、收付款、核销、对账；JUnit5 + H2 集成测试 + JaCoCo
 
 ## 后续规划
-1. 财务：收货/发货自动生成应付/应收，收付款核销，往来对账
+1. 财务：红冲/反核销、账龄分析、预收预付、发票
 2. 采购：采购申请 → 订单、分批到货、退货；销售：发货单、部分发货、退货
 3. 库存：调拨、盘点、库存冻结/预占、批次与库位、月结
 4. 审批流：流程定义（多节点、会签/或签、条件分支）、转办与审批记录
