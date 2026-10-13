@@ -41,7 +41,7 @@ class DefaultApprovalIntegrationTest extends SysTestSupport {
         long sap2 = ok(admin, "POST", "/api/sales/orders/" + soId + "/submit", null).path("approvalId").asLong();
         ok(approver, "POST", "/api/workflow/approvals/" + sap2 + "/decide", "{\"approved\":true}");
         assertThat(ok(admin, "POST", "/api/sales/orders/" + soId + "/ship", null).path("order").path("status").asText()).isEqualTo("SHIPPED");
-        assertThat(ok(admin, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").decimalValue()).isEqualByComparingTo("6");
+        assertThat(new java.math.BigDecimal(ok(admin, "GET", "/api/inventory/stocks?materialId=" + mat + "&warehouseId=" + wh, null).path("records").get(0).path("qty").asText())).isEqualByComparingTo("6");
         assertThat(code(admin, "POST", "/api/sales/orders/" + soId + "/ship", null)).isEqualTo(400);
     }
 }

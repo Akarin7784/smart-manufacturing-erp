@@ -171,6 +171,46 @@ ALTER TABLE mdm_material MODIFY created_at DATETIME DEFAULT CURRENT_TIMESTAMP, M
 ```
 新的权限点（8 `sys:read`、9 `sys:write`、10 `workflow:admin`）由 `data.sql` 幂等插入，启动时自动补齐。
 
+## 乐观锁（version）
+- 四类主数据、用户、角色、权限点都有 `version` 字段（MyBatis-Plus `@Version`），列表和详情接口都会返回。
+- 更新接口（`PUT /api/mdm/*/{id}`、`PUT /api/sys/users/{id}`、`PUT /api/sys/roles/{id}`、`PUT /api/sys/permissions/{id}`）必须在请求体里带上查询到的 `version`：
+  - 不传返回 400（"version 不能为空…"）；
+  - 和库里的不一致（别人已经改过）返回 409/40900（"数据已被修改，请刷新后重试"），前端应重新拉取详情再编辑；
+  - 成功后返回的 `version` 加 1。
+- 已有 MySQL 库需要执行：
+```sql
+ALTER TABLE mdm_material  ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE mdm_customer  ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE mdm_supplier  ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE mdm_warehouse ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE sys_user       ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE sys_role       ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE sys_permission ADD COLUMN version INT NOT NULL DEFAULT 0;
+```
+
+## 金额与数量（BigDecimal）
+- 响应里所有 BigDecimal 字段都序列化为**字符串**（`toPlainString`，不会出现科学计数法），例如 `"amount":"1234567890123456.12"`，避免 JS number 丢精度。
+- 请求体里字符串和数字都接收，**推荐传字符串**（`"amount":"12.30"`）。非法值（如 `"abc"`、`"1.2.3"`）返回 400，提示带字段名，例如 "amount 必须是数字"、"items[0].price 必须是数字"。
+- 全部 BigDecimal 字段（主数据里没有 BigDecimal 字段）：
+
+| 模块 | 字段 | 精度 |
+|---|---|---|
+| 采购 / 销售订单 | `totalAmount` | 金额，2 位 |
+| 采购 / 销售订单明细 | `qty`、`price` | 数量、单价，最多 4 位小数 |
+| 采购 / 销售订单明细 | `amount`（行金额 = 数量×单价，HALF_UP 保留 2 位） | 金额，2 位 |
+| 库存 `inv_stock` | `qty` | 数量，4 位 |
+| 库存流水 `inv_stock_txn` | `qty`、`balanceAfter` | 数量，4 位 |
+| 应收应付单 | `amount`、`settledAmount` | 金额，2 位 |
+| 收付款 | `amount`、`appliedAmount` | 金额，2 位 |
+| 核销 | `amount` | 金额，2 位 |
+| 对账汇总 | `totalAmount`、`settledAmount`、`balance` | 金额，2 位 |
+| 流程节点 | `minAmount` | 金额，2 位 |
+| 审批实例 | `amount` | 金额，2 位 |
+
+- 单价按原值保存（最多 4 位小数），不会先舍入成 2 位；只有行金额和合计按 2 位保留。
+- 行金额、订单合计超出金额列上限（整数部分 16 位）返回 400，例如"第 1 行金额整数部分最多 16 位，超出金额上限"；入库后库存数量超过 14 位整数也返回 400，不再是 500。
+- 校验提示：`@NotNull`、`@NotBlank` 等默认提示是中文，前面带字段名，例如 "paymentType 不能为空"、"status 不能大于 1"；业务上自定义的提示（金额、数量等）原样返回。
+
 ## 错误码
 响应体 `code` 是细分码，HTTP 状态是大类（定义在 `erp-common` 的 `ErrorCode` 枚举里）。通用错误的 `code` 就等于 HTTP 状态码；业务细分码按 HTTP 状态 × 100 + 序号编排。
 

@@ -11,4 +11,6 @@ import lombok.EqualsAndHashCode;
 public class SysPermission extends BaseEntity {
     private String code;
     private String name;
+    @com.baomidou.mybatisplus.annotation.Version
+    private Integer version;
 }

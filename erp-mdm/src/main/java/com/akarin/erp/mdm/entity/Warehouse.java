@@ -14,4 +14,7 @@ public class Warehouse extends BaseEntity implements MasterData {
     private String name;
     private String address;
     private Integer status;
+    /** 乐观锁版本号：更新时必须带上查询到的值 */
+    @com.baomidou.mybatisplus.annotation.Version
+    private Integer version;
 }

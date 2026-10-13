@@ -19,4 +19,7 @@ public class SysUser extends BaseEntity {
     /** 令牌版本：停用、改密、调整角色时 +1，使旧 token 失效 */
     @JsonIgnore
     private Integer tokenVersion;
+    /** 乐观锁版本号（与 tokenVersion 无关） */
+    @com.baomidou.mybatisplus.annotation.Version
+    private Integer version;
 }

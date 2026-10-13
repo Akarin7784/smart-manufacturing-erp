@@ -6,4 +6,5 @@ import jakarta.validation.constraints.Size;
 
 /** 角色 / 权限点的创建与更新请求；更新时 code 不可修改 */
 public record CodeNameReq(@NotBlank(groups = com.akarin.erp.common.validation.OnCreate.class) @Size(max = 64) @Pattern(regexp = "^[A-Za-z0-9_:.-]+$", message = "编码只能包含字母、数字、_ : . -", payload = com.akarin.erp.common.validation.FullMessage.class) String code,
-                          @NotBlank @Size(max = 64) String name) {}
+                          @NotBlank @Size(max = 64) String name,
+                          /** 更新必填（乐观锁），创建时忽略 */ Integer version) {}

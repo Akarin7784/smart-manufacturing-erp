@@ -34,6 +34,7 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + e.getCode());
         e.setId(null);
         if (e.getStatus() == null) e.setStatus(ENABLED);
+        e.setVersion(0);
         try {
             save(e);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -44,12 +45,13 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
 
     @Transactional
     public E update(Long id, E patch) {
+        com.akarin.erp.common.util.Versions.requirePresent(patch.getVersion());
         E existing = require(id);
         if (patch.getCode() != null && !patch.getCode().equals(existing.getCode()))
             throw new BizException("编码不可修改: " + existing.getCode());
         patch.setId(id);
         patch.setCode(existing.getCode());
-        updateById(patch);
+        com.akarin.erp.common.util.Versions.requireUpdated(updateById(patch));
         return require(id);
     }
 
