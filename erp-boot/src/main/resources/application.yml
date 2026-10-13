@@ -15,6 +15,15 @@ spring:
     # Redis 已引入依赖，暂未使用；需要时去掉此排除并配置 spring.data.redis
     exclude: org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true

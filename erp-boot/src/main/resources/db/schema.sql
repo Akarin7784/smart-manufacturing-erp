@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS sys_user (
   password VARCHAR(100),
   real_name VARCHAR(64),
   status TINYINT DEFAULT 1,
+  token_version INT NOT NULL DEFAULT 0,
   created_at DATETIME,
   updated_at DATETIME,
   created_by VARCHAR(64),
@@ -90,11 +91,54 @@ CREATE TABLE IF NOT EXISTS wf_approval_instance (
   applicant VARCHAR(64),
   approver VARCHAR(64),
   comment VARCHAR(255),
+  amount DECIMAL(18,2),
+  node_plan VARCHAR(512),
+  current_index INT NOT NULL DEFAULT 0,
+  version INT NOT NULL DEFAULT 0,
   finished_at DATETIME,
   created_at DATETIME,
   updated_at DATETIME,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wf_process_def (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  biz_type VARCHAR(32) NOT NULL UNIQUE,
+  name VARCHAR(64) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wf_node_def (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  process_id BIGINT NOT NULL,
+  seq INT NOT NULL,
+  name VARCHAR(64) NOT NULL,
+  role_code VARCHAR(64) NOT NULL,
+  approve_mode VARCHAR(8) NOT NULL,
+  min_amount DECIMAL(18,2),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_node_process (process_id, seq)
+);
+CREATE TABLE IF NOT EXISTS wf_approval_record (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  instance_id BIGINT NOT NULL,
+  node_id BIGINT,
+  node_name VARCHAR(64),
+  node_index INT NOT NULL DEFAULT 0,
+  approver VARCHAR(64) NOT NULL,
+  action VARCHAR(16) NOT NULL,
+  comment VARCHAR(255),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_record_instance (instance_id, node_index)
 );
 
 CREATE TABLE IF NOT EXISTS inv_stock (

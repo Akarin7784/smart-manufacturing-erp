@@ -76,7 +76,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
             throw new BizException("当前状态不可提交: " + o.getStatus());
         o.setStatus("PENDING");
         updateById(o);
-        return approvalService.start(BIZ_TYPE, o.getId(), o.getOrderNo()).getId();
+        return approvalService.start(BIZ_TYPE, o.getId(), o.getOrderNo(), o.getTotalAmount()).getId();
     }
 
     /** 审批结果回调 */
@@ -84,7 +84,8 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
     public void onApproval(ApprovalFinishedEvent e) {
         if (!BIZ_TYPE.equals(e.bizType())) return;
         PurchaseOrder o = require(e.bizId());
-        o.setStatus(e.approved() ? "APPROVED" : "REJECTED");
+        // 驳回回到草稿，可修改后重新提交
+        o.setStatus(e.approved() ? "APPROVED" : "DRAFT");
         updateById(o);
     }
 

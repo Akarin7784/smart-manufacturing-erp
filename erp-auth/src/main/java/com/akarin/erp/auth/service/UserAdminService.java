@@ -1,0 +1,138 @@
+package com.akarin.erp.auth.service;
+
+import com.akarin.erp.auth.dto.UserReqs;
+import com.akarin.erp.auth.dto.UserView;
+import com.akarin.erp.auth.entity.SysRole;
+import com.akarin.erp.auth.entity.SysUser;
+import com.akarin.erp.auth.entity.SysUserRole;
+import com.akarin.erp.auth.mapper.SysRoleMapper;
+import com.akarin.erp.auth.mapper.SysUserMapper;
+import com.akarin.erp.auth.mapper.SysUserRoleMapper;
+import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
+import com.akarin.erp.common.util.SecurityUtils;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
+
+@Service
+@RequiredArgsConstructor
+public class UserAdminService {
+    public static final String ADMIN_ROLE = "ADMIN";
+    private final SysUserMapper userMapper;
+    private final SysRoleMapper roleMapper;
+    private final SysUserRoleMapper userRoleMapper;
+    private final PasswordEncoder encoder;
+
+    public Page<UserView> page(long page, long size, String keyword) {
+        Page<SysUser> p = userMapper.selectPage(new Page<>(page, size), new LambdaQueryWrapper<SysUser>()
+                .and(StringUtils.hasText(keyword), w -> w.like(SysUser::getUsername, keyword).or().like(SysUser::getRealName, keyword))
+                .orderByAsc(SysUser::getId));
+        Page<UserView> out = new Page<>(p.getCurrent(), p.getSize(), p.getTotal());
+        out.setRecords(p.getRecords().stream().map(this::view).toList());
+        return out;
+    }
+
+    public UserView get(Long id) { return view(require(id)); }
+
+    @Transactional
+    public UserView create(UserReqs.Create req) {
+        if (userMapper.countByUsernameIncludingDeleted(req.username()) > 0)
+            throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: 用户名 " + req.username());
+        SysUser u = new SysUser();
+        u.setUsername(req.username());
+        u.setPassword(encoder.encode(req.password()));
+        u.setRealName(req.realName());
+        u.setStatus(SysUser.ENABLED);
+        u.setTokenVersion(0);
+        userMapper.insert(u);
+        if (req.roleIds() != null && !req.roleIds().isEmpty()) replaceRoles(u, req.roleIds());
+        return view(u);
+    }
+
+    @Transactional
+    public UserView update(Long id, UserReqs.Update req) {
+        SysUser u = require(id);
+        u.setRealName(req.realName());
+        userMapper.updateById(u);
+        return view(u);
+    }
+
+    @Transactional
+    public void resetPassword(Long id, String password) {
+        SysUser u = require(id);
+        u.setPassword(encoder.encode(password));
+        userMapper.updateById(u);
+        userMapper.bumpTokenVersion(id);
+    }
+
+    @Transactional
+    public UserView setEnabled(Long id, boolean enabled) {
+        SysUser u = require(id);
+        if (!enabled) {
+            if (isSelf(u)) throw new BizException("不能停用当前登录用户");
+            guardLastAdmin(u, "停用");
+        }
+        u.setStatus(enabled ? SysUser.ENABLED : SysUser.DISABLED);
+        userMapper.updateById(u);
+        userMapper.bumpTokenVersion(id);
+        return view(require(id));
+    }
+
+    @Transactional
+    public UserView assignRoles(Long id, List<Long> roleIds) {
+        SysUser u = require(id);
+        replaceRoles(u, roleIds);
+        userMapper.bumpTokenVersion(id);
+        return view(require(id));
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        SysUser u = require(id);
+        if (isSelf(u)) throw new BizException("不能删除当前登录用户");
+        guardLastAdmin(u, "删除");
+        userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
+        userMapper.bumpTokenVersion(id);
+        userMapper.deleteById(id);
+    }
+
+    private void replaceRoles(SysUser u, List<Long> roleIds) {
+        var ids = new LinkedHashSet<>(roleIds);
+        List<SysRole> roles = ids.isEmpty() ? List.of() : roleMapper.selectBatchIds(ids);
+        if (roles.size() != ids.size()) throw new BizException(ErrorCode.NOT_FOUND, "角色不存在");
+        boolean keepsAdmin = roles.stream().anyMatch(r -> ADMIN_ROLE.equals(r.getCode()));
+        if (!keepsAdmin) guardLastAdmin(u, "移除管理员角色");
+        userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, u.getId()));
+        ids.forEach(rid -> userRoleMapper.insert(new SysUserRole(u.getId(), rid)));
+    }
+
+    /** 该用户是启用的管理员且是最后一个时，禁止停用/删除/去掉 ADMIN */
+    private void guardLastAdmin(SysUser u, String action) {
+        boolean enabledAdmin = Objects.equals(u.getStatus(), SysUser.ENABLED)
+                && userMapper.selectRoleCodes(u.getId()).contains(ADMIN_ROLE);
+        if (enabledAdmin && userMapper.countEnabledAdmins() <= 1)
+            throw new BizException("不能" + action + "最后一个管理员");
+    }
+
+    private boolean isSelf(SysUser u) { return u.getUsername().equals(SecurityUtils.currentUsername()); }
+
+    private SysUser require(Long id) {
+        SysUser u = userMapper.selectById(id);
+        if (u == null) throw new BizException(ErrorCode.NOT_FOUND, "用户不存在: " + id);
+        return u;
+    }
+
+    private UserView view(SysUser u) {
+        return new UserView(u.getId(), u.getUsername(), u.getRealName(),
+                Objects.equals(u.getStatus(), SysUser.ENABLED), userMapper.selectRoleCodes(u.getId()));
+    }
+}

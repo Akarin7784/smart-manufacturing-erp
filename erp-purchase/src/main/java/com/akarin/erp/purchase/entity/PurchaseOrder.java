@@ -13,7 +13,7 @@ public class PurchaseOrder extends BaseEntity {
     private String orderNo;
     private Long supplierId;
     private Long warehouseId;
-    /** DRAFT -> PENDING -> APPROVED -> RECEIVED；驳回回到 REJECTED */
+    /** DRAFT -> PENDING -> APPROVED -> RECEIVED；驳回回到 DRAFT */
     private String status;
     private BigDecimal totalAmount;
     private String remark;
