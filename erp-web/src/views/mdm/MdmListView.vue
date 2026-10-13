@@ -138,7 +138,7 @@ function onPageChange(p) { page.value = p; load() }
 function onSizeChange(s) { size.value = s; page.value = 1; load() }
 
 // 首次加载只在 onMounted 触发一次；resource 变化（同一组件实例复用时）再重新加载
-onMounted(load)
+onMounted(() => load())
 watch(() => props.resource, () => { keyword.value = ''; page.value = 1; load() })
 
 defineExpose({ refresh, openForm, onDelete, canWrite, formVisible, editingRow, load, onSearch, onReset, onPageChange, onSizeChange, records, total, page, size, keyword })
