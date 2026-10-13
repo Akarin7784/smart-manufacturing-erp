@@ -105,7 +105,7 @@ test.describe('只读用户（无 mdm:write）', () => {
 
   test('直接调用写接口 → 403 / code 403', async ({ request }) => {
     expectCode(await api(request, 'POST', '/api/mdm/materials', { token, data: { code: uniq('RO-'), name: 'x' } }), 403, 403)
-    expectCode(await api(request, 'PUT', '/api/mdm/materials/1', { token, data: { code: 'DM-M001', name: 'x', status: 1 } }), 403, 403)
+    expectCode(await api(request, 'PUT', '/api/mdm/materials/1', { token, data: { code: 'DM-M001', name: 'x', status: 1, version: 0 } }), 403, 403)
     expectCode(await api(request, 'DELETE', '/api/mdm/customers/1', { token }), 403, 403)
     expectCode(await api(request, 'POST', '/api/sys/roles', { token, data: { code: uniq('X'), name: 'x' } }), 403, 403)
   })
@@ -204,9 +204,13 @@ for (const c of CRUD) {
       const body = (await reqP).postDataJSON()
       expect(body.code).toBe(code)
       expect(body.name).toBe(newName)
+      // 乐观锁：PUT 必须带当前行的 version（新建行为 0）
+      expect(body.version).toBe(0)
       const r = await resP
       expect(r.status()).toBe(200)
-      expect((await r.json()).code).toBe(0)
+      const rb = await r.json()
+      expect(rb.code).toBe(0)
+      expect(rb.data.version).toBe(1)
       await expect(rowOf(page, code)).toContainText(newName)
     })
 
