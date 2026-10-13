@@ -1,0 +1,196 @@
+-- ERP schema（兼容 MySQL 8 与 H2 MySQL 模式）
+
+CREATE TABLE IF NOT EXISTS sys_user (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(64) NOT NULL UNIQUE,
+  password VARCHAR(100),
+  real_name VARCHAR(64),
+  status TINYINT DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sys_role (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(64),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sys_permission (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(64),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sys_user_role (user_id BIGINT NOT NULL, role_id BIGINT NOT NULL, PRIMARY KEY (user_id, role_id));
+CREATE TABLE IF NOT EXISTS sys_role_permission (role_id BIGINT NOT NULL, permission_id BIGINT NOT NULL, PRIMARY KEY (role_id, permission_id));
+
+CREATE TABLE IF NOT EXISTS mdm_material (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(128) NOT NULL,
+  spec VARCHAR(128),
+  unit VARCHAR(16),
+  category VARCHAR(64),
+  status TINYINT DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mdm_customer (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(128) NOT NULL,
+  contact VARCHAR(64),
+  phone VARCHAR(32),
+  status TINYINT DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mdm_supplier (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(128) NOT NULL,
+  contact VARCHAR(64),
+  phone VARCHAR(32),
+  status TINYINT DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS mdm_warehouse (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  code VARCHAR(64) NOT NULL UNIQUE,
+  name VARCHAR(128) NOT NULL,
+  address VARCHAR(255),
+  status TINYINT DEFAULT 1,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS wf_approval_instance (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  biz_type VARCHAR(32) NOT NULL,
+  biz_id BIGINT NOT NULL,
+  biz_no VARCHAR(64),
+  status VARCHAR(16) NOT NULL,
+  applicant VARCHAR(64),
+  approver VARCHAR(64),
+  comment VARCHAR(255),
+  finished_at DATETIME,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS inv_stock (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  material_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  qty DECIMAL(18,4) NOT NULL DEFAULT 0,
+  version INT NOT NULL DEFAULT 0,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0,
+  UNIQUE (material_id, warehouse_id)
+);
+CREATE TABLE IF NOT EXISTS inv_stock_txn (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  txn_no VARCHAR(64) NOT NULL,
+  direction VARCHAR(8) NOT NULL,
+  material_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  qty DECIMAL(18,4) NOT NULL,
+  balance_after DECIMAL(18,4) NOT NULL,
+  biz_type VARCHAR(32),
+  biz_no VARCHAR(64),
+  remark VARCHAR(255),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS pur_order (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_no VARCHAR(64) NOT NULL UNIQUE,
+  supplier_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  total_amount DECIMAL(18,2) DEFAULT 0,
+  remark VARCHAR(255),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS pur_order_item (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_id BIGINT NOT NULL,
+  material_id BIGINT NOT NULL,
+  qty DECIMAL(18,4) NOT NULL,
+  price DECIMAL(18,4) NOT NULL,
+  amount DECIMAL(18,2) NOT NULL,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS sal_order (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_no VARCHAR(64) NOT NULL UNIQUE,
+  customer_id BIGINT NOT NULL,
+  warehouse_id BIGINT NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  total_amount DECIMAL(18,2) DEFAULT 0,
+  remark VARCHAR(255),
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sal_order_item (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_id BIGINT NOT NULL,
+  material_id BIGINT NOT NULL,
+  qty DECIMAL(18,4) NOT NULL,
+  price DECIMAL(18,4) NOT NULL,
+  amount DECIMAL(18,2) NOT NULL,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS fin_arap_bill (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  bill_no VARCHAR(64) NOT NULL UNIQUE,
+  bill_type VARCHAR(8) NOT NULL,
+  partner_id BIGINT NOT NULL,
+  source_biz_type VARCHAR(32),
+  source_biz_no VARCHAR(64),
+  amount DECIMAL(18,2) NOT NULL,
+  settled_amount DECIMAL(18,2) DEFAULT 0,
+  status VARCHAR(16) NOT NULL,
+  due_date DATE,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0
+);

@@ -1,0 +1,33 @@
+package com.akarin.erp.auth.init;
+
+import com.akarin.erp.auth.entity.SysUser;
+import com.akarin.erp.auth.mapper.SysUserMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Component;
+
+/** 首次启动时补齐 admin 的密码（schema 里的 admin 账号密码占位为空） */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class AdminInitializer implements ApplicationRunner {
+    private final SysUserMapper userMapper;
+    private final PasswordEncoder encoder;
+    @Value("${erp.init.admin-password:admin123}")
+    private String adminPassword;
+
+    @Override
+    public void run(ApplicationArguments args) {
+        SysUser admin = userMapper.selectOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, "admin"));
+        if (admin != null && (admin.getPassword() == null || admin.getPassword().isEmpty())) {
+            admin.setPassword(encoder.encode(adminPassword));
+            userMapper.updateById(admin);
+            log.info("initialized admin password");
+        }
+    }
+}
