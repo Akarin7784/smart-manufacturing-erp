@@ -9,6 +9,7 @@ import { MDM_FORMS } from '@/config/mdm'
 import { BizError } from '@/utils/request'
 import { ErrorCode, ERROR_MESSAGES } from '@/api/errorCodes'
 
+const SIG = { signal: expect.any(AbortSignal) }
 vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), createMdm: vi.fn(), updateMdm: vi.fn(), deleteMdm: vi.fn() }))
 
 const rows = [{ id: 7, code: 'M007', name: '螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 }]
@@ -73,7 +74,7 @@ describe('列表页新增/编辑/删除', () => {
     const w = mountList(); await flushPromises()
     w.vm.onPageChange(2); await flushPromises()
     await w.vm.onDelete(rows[0]); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('materials', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenLastCalledWith('materials', { page: 1, size: 20 }, SIG)
   })
   it('取消删除不调用接口', async () => {
     vi.spyOn(ElMessageBox, 'confirm').mockImplementation(fail)

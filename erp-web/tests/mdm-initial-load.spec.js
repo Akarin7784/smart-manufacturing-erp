@@ -7,6 +7,7 @@ import { createAppRouter } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import { pageMdm } from '@/api/mdm'
 
+const SIG = { signal: expect.any(AbortSignal) }
 vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), createMdm: vi.fn(), updateMdm: vi.fn(), deleteMdm: vi.fn() }))
 
 const settle = async () => { await flushPromises(); await new Promise((r) => setTimeout(r, 30)); await flushPromises() }
@@ -20,7 +21,7 @@ describe('列表页首次加载只请求一次', () => {
     mount(MdmListView, { props: { resource: 'materials' } })
     await settle()
     expect(pageMdm).toHaveBeenCalledTimes(1)
-    expect(pageMdm).toHaveBeenCalledWith('materials', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenCalledWith('materials', { page: 1, size: 20 }, SIG)
   })
 
   it.each([0, 26])('经路由打开 /mdm/materials（total=%i）：只发 1 次', async (total) => {
@@ -34,7 +35,7 @@ describe('列表页首次加载只请求一次', () => {
     expect(pageMdm).toHaveBeenCalledTimes(1)
     await router.push('/mdm/customers'); await settle()
     expect(pageMdm).toHaveBeenCalledTimes(2)
-    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20 }, SIG)
   })
 
   it('相同参数的并发 load 合并为一次请求', async () => {

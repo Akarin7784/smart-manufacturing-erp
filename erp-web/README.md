@@ -15,7 +15,7 @@ npm run test:coverage
 
 开发代理目标由环境变量 `VITE_PROXY_TARGET` 指定，默认 `http://localhost:8080`，例如：`VITE_PROXY_TARGET=http://localhost:8081 npm run dev`。
 
-后端（H2）：`mvn -pl erp-boot -am spring-boot:run`，默认账号 `admin / admin123`。Node ≥ 22（见 `.nvmrc`）。Element Plus 通过 unplugin-vue-components / unplugin-auto-import 按需引入。
+后端（H2）：`mvn -pl erp-boot -am spring-boot:run`，默认账号 `admin / admin123`。Node 22.x（与 CI `actions/setup-node` 的 node-version 22 一致，见 `.nvmrc`）。Element Plus 通过 unplugin-vue-components / unplugin-auto-import 按需引入。
 
 ## 目录
 
