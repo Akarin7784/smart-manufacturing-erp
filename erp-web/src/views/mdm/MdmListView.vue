@@ -37,7 +37,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteMdm, pageMdm } from '@/api/mdm'
 import { useAuthStore } from '@/stores/auth'
@@ -87,20 +87,34 @@ async function onDelete(row) {
 const statusText = (s) => (s === 1 ? '启用' : s === 0 ? '停用' : '-')
 const statusTag = (s) => (s === 1 ? 'success' : 'info')
 
-async function load() {
-  loading.value = true
-  try {
-    const params = { page: page.value, size: size.value }
-    if (keyword.value.trim()) params.keyword = keyword.value.trim()
-    const data = await pageMdm(props.resource, params)
-    records.value = data?.records || []
-    total.value = Number(data?.total || 0)
-  } catch {
-    records.value = []
-    total.value = 0
-  } finally {
-    loading.value = false
-  }
+let inflight = null // { key, promise }：相同参数的并发请求只发一次
+
+function load() {
+  const params = { page: page.value, size: size.value }
+  if (keyword.value.trim()) params.keyword = keyword.value.trim()
+  const key = `${props.resource}?${JSON.stringify(params)}`
+  if (inflight?.key === key) return inflight.promise
+  const resource = props.resource
+  const promise = (async () => {
+    loading.value = true
+    try {
+      const data = await pageMdm(resource, params)
+      if (inflight?.key !== key) return // 已被更新的请求取代，丢弃旧结果
+      records.value = data?.records || []
+      total.value = Number(data?.total || 0)
+    } catch {
+      if (inflight?.key !== key) return
+      records.value = []
+      total.value = 0
+    } finally {
+      if (inflight?.key === key) {
+        inflight = null
+        loading.value = false
+      }
+    }
+  })()
+  inflight = { key, promise }
+  return promise
 }
 
 function onSearch() { page.value = 1; load() }
@@ -108,7 +122,9 @@ function onReset() { keyword.value = ''; page.value = 1; load() }
 function onPageChange(p) { page.value = p; load() }
 function onSizeChange(s) { size.value = s; page.value = 1; load() }
 
-watch(() => props.resource, () => { keyword.value = ''; page.value = 1; load() }, { immediate: true })
+// 首次加载只在 onMounted 触发一次；resource 变化（同一组件实例复用时）再重新加载
+onMounted(load)
+watch(() => props.resource, () => { keyword.value = ''; page.value = 1; load() })
 
 defineExpose({ openForm, onDelete, canWrite, formVisible, editingRow, load, onSearch, onReset, onPageChange, onSizeChange, records, total, page, size, keyword })
 </script>
