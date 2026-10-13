@@ -22,6 +22,8 @@ public class ApprovalInstance extends BaseEntity {
     private String applicant;
     private String nodePlan;
     private Integer currentIndex;
+    /** 启动时固化的各节点审批人名单，JSON：{"节点ID":["user1","user2"]}；会签按此名单计数 */
+    private String approverSnapshot;
     /** 最后处理人（兼容原字段） */
     private String approver;
     private String comment;

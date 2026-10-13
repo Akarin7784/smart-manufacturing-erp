@@ -16,6 +16,9 @@ import com.akarin.erp.workflow.mapper.ApprovalRecordMapper;
 import com.akarin.erp.workflow.mapper.NodeDefMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -25,7 +28,9 @@ import org.springframework.util.StringUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -41,6 +46,7 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
     private final NodeDefMapper nodeMapper;
     private final ApprovalRecordMapper recordMapper;
     private final ApproverDirectory directory;
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     /** 兼容旧调用：无金额 */
     public ApprovalInstance start(String bizType, Long bizId, String bizNo) { return start(bizType, bizId, bizNo, null); }
@@ -61,6 +67,15 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
             List<NodeDef> plan = ApprovalRules.applicableNodes(definitions.nodes(def.getId()), amount);
             if (plan.isEmpty()) throw new BizException("流程 " + bizType + " 没有适用于该金额的审批节点");
             i.setNodePlan(String.join(",", plan.stream().map(n -> String.valueOf(n.getId())).toList()));
+            // 固化每个节点的审批人名单（不含申请人本人）；会签按名单计数，后续角色成员变化不影响在途单据
+            Map<String, List<String>> snapshot = new LinkedHashMap<>();
+            for (NodeDef n : plan) {
+                List<String> users = directory.usernamesWithRole(n.getRoleCode()).stream()
+                        .filter(u -> !u.equals(i.getApplicant())).toList();
+                if (users.isEmpty()) throw new BizException("节点「" + n.getName() + "」没有可用审批人（申请人本人不能审批）");
+                snapshot.put(String.valueOf(n.getId()), users);
+            }
+            i.setApproverSnapshot(toJson(snapshot));
         }
         save(i);
         return i;
@@ -73,8 +88,9 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
         if (i == null) throw new BizException(ErrorCode.NOT_FOUND, "审批单不存在");
         if (!PENDING.equals(i.getStatus())) throw new BizException("审批单已处理");
         String me = SecurityUtils.currentUsername();
+        if (me.equals(i.getApplicant())) throw new BizException(ErrorCode.FORBIDDEN, "不能审批自己提交的单据");
         NodeDef node = currentNode(i);
-        if (!ApprovalRules.canApprove(node, SecurityUtils.currentAuthorities()))
+        if (!ApprovalRules.canApprove(node, SecurityUtils.currentAuthorities(), me, countersigners(i, node)))
             throw new BizException(ErrorCode.FORBIDDEN, "不是当前节点审批人");
         boolean acted = recordMapper.exists(recordsAtCurrentNode(i).eq(ApprovalRecord::getApprover, me));
         if (acted) throw new BizException("你已处理过当前节点");
@@ -84,7 +100,12 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
         r.setNodeId(node == null ? null : node.getId());
         r.setNodeName(node == null ? "默认审批" : node.getName());
         r.setApprover(me); r.setAction(approved ? ApprovalRecord.APPROVE : ApprovalRecord.REJECT); r.setComment(comment);
-        recordMapper.insert(r);
+        try {
+            recordMapper.insert(r);
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // 唯一索引 (instance_id, node_index, approver) 兜底并发重复审批
+            throw new BizException(ErrorCode.CONCURRENT_MODIFICATION, "重复审批（并发提交）");
+        }
 
         i.setApprover(me);
         i.setComment(comment);
@@ -95,7 +116,7 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
         } else {
             long approvals = recordMapper.selectCount(recordsAtCurrentNode(i).eq(ApprovalRecord::getAction, ApprovalRecord.APPROVE));
             String mode = node == null ? NodeDef.ANY : node.getApproveMode();
-            int required = node == null ? 1 : directory.usernamesWithRole(node.getRoleCode()).size();
+            int required = node == null ? 1 : countersigners(i, node).size();
             if (!ApprovalRules.nodeCompleted(mode, approvals, required)) {
                 finished = false;
             } else if (i.getCurrentIndex() + 1 < planIds(i).size()) {
@@ -118,7 +139,13 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
         String me = SecurityUtils.currentUsername();
         return list(new LambdaQueryWrapper<ApprovalInstance>().eq(ApprovalInstance::getStatus, PENDING).orderByAsc(ApprovalInstance::getId))
                 .stream()
-                .filter(i -> ApprovalRules.canApprove(currentNode(i), auth))
+                .filter(i -> !me.equals(i.getApplicant()))
+                .filter(i -> {
+                    List<Long> ids = planIds(i);
+                    NodeDef n = ids.isEmpty() ? null : nodeMapper.selectById(ids.get(i.getCurrentIndex()));
+                    if (!ids.isEmpty() && n == null) return false;   // 节点异常的实例不影响整个待办列表
+                    return ApprovalRules.canApprove(n, auth, me, countersigners(i, n));
+                })
                 .filter(i -> !recordMapper.exists(recordsAtCurrentNode(i).eq(ApprovalRecord::getApprover, me)))
                 .toList();
     }
@@ -143,6 +170,21 @@ public class ApprovalService extends ServiceImpl<ApprovalInstanceMapper, Approva
     private LambdaQueryWrapper<ApprovalRecord> recordsAtCurrentNode(ApprovalInstance i) {
         return new LambdaQueryWrapper<ApprovalRecord>().eq(ApprovalRecord::getInstanceId, i.getId())
                 .eq(ApprovalRecord::getNodeIndex, i.getCurrentIndex());
+    }
+
+    /** 节点的固化审批人名单；默认节点或旧数据无快照时返回空 */
+    private static List<String> countersigners(ApprovalInstance i, NodeDef node) {
+        if (node == null || !StringUtils.hasText(i.getApproverSnapshot())) return List.of();
+        try {
+            Map<String, List<String>> m = JSON.readValue(i.getApproverSnapshot(), new TypeReference<>() {});
+            return m.getOrDefault(String.valueOf(node.getId()), List.of());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("审批人快照损坏: " + i.getId(), e);
+        }
+    }
+
+    private static String toJson(Object o) {
+        try { return JSON.writeValueAsString(o); } catch (JsonProcessingException e) { throw new IllegalStateException(e); }
     }
 
     private static List<Long> planIds(ApprovalInstance i) {

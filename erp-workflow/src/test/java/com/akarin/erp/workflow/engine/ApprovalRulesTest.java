@@ -43,5 +43,16 @@ class ApprovalRulesTest {
         assertThat(ApprovalRules.canApprove(n, Set.of("ROLE_FIN", "workflow:approve"))).as("越权").isFalse();
         assertThat(ApprovalRules.canApprove(null, Set.of("workflow:approve"))).as("默认单级审批").isTrue();
         assertThat(ApprovalRules.canApprove(null, Set.of("ROLE_MGR"))).isFalse();
+        assertThat(ApprovalRules.canApprove(null, Set.of("ROLE_ADMIN"))).as("默认审批 ADMIN 放行").isTrue();
+        assertThat(ApprovalRules.canApprove(n, Set.of("ROLE_ADMIN"))).as("配置节点 ADMIN 不放行").isFalse();
+    }
+
+    @Test void countersignRestrictedToFrozenList() {
+        NodeDef all = node(1, 1, "FIN", NodeDef.ALL, null), any = node(2, 2, "FIN", NodeDef.ANY, null);
+        assertThat(ApprovalRules.canApprove(all, Set.of("ROLE_FIN"), "a", List.of("a", "b"))).isTrue();
+        assertThat(ApprovalRules.canApprove(all, Set.of("ROLE_FIN"), "c", List.of("a", "b"))).as("名单外").isFalse();
+        assertThat(ApprovalRules.canApprove(all, Set.of("ROLE_GM"), "a", List.of("a"))).as("角色已移除").isFalse();
+        assertThat(ApprovalRules.canApprove(any, Set.of("ROLE_FIN"), "c", List.of())).as("或签不看名单").isTrue();
+        assertThat(ApprovalRules.canApprove(null, Set.of("workflow:approve"), "c", List.of())).isTrue();
     }
 }

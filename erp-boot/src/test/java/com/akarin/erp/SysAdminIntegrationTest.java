@@ -80,6 +80,48 @@ class SysAdminIntegrationTest extends SysTestSupport {
         assertThat(code(admin, "GET", "/api/auth/me", null)).isZero();
     }
 
+    @Test void adminNotLockedOutWhenAdminPermissionsCleared() throws Exception {
+        JsonNode role = ok(admin, "GET", "/api/sys/roles/1", null);
+        StringBuilder orig = new StringBuilder();
+        for (JsonNode id : role.path("permissionIds")) orig.append(orig.length() == 0 ? "" : ",").append(id.asLong());
+        try {
+            ok(admin, "PUT", "/api/sys/roles/1/permissions", "{\"ids\":[]}");
+            String t = login("admin", "admin123");
+            JsonNode me = ok(t, "GET", "/api/auth/me", null);
+            assertThat(me.path("authorities").toString()).doesNotContain("sys:read").contains("ROLE_ADMIN");
+            assertThat(code(t, "GET", "/api/sys/users", null)).isZero();
+            assertThat(code(t, "POST", "/api/sys/roles", "{\"code\":\"" + uniq("LOCK").toUpperCase() + "\",\"name\":\"x\"}")).isZero();
+            assertThat(code(t, "POST", "/api/mdm/materials", "{\"code\":\"" + uniq("M") + "\",\"name\":\"x\"}")).isZero();
+        } finally {
+            ok(login("admin", "admin123"), "PUT", "/api/sys/roles/1/permissions", "{\"ids\":[" + orig + "]}");
+        }
+    }
+
+    @Test void builtinPermissionsCannotBeDeleted() throws Exception {
+        for (String c : new String[]{"sys:write", "workflow:approve", "mdm:write"}) {
+            JsonNode r = call(admin, "DELETE", "/api/sys/permissions/" + permIds.get(c), null);
+            assertThat(r.path("code").asInt()).as(c).isEqualTo(400);
+            assertThat(r.path("msg").asText()).contains("内置权限点");
+        }
+        assertThat(ok(admin, "GET", "/api/sys/permissions", null).toString()).contains("sys:write");
+    }
+
+    @Test void onlyAdminCanGrantOrRevokeAdminRole() throws Exception {
+        User ops = user(role("OPS", "sys:read", "sys:write"));
+        String t = ops.token(this);
+        User target = user();
+        JsonNode r = call(t, "PUT", "/api/sys/users/" + target.id() + "/roles", "{\"ids\":[1]}");
+        assertThat(r.path("code").asInt()).isEqualTo(403);
+        assertThat(code(t, "POST", "/api/sys/users", "{\"username\":\"" + uniq("x") + "\",\"password\":\"" + PW + "\",\"roleIds\":[1]}")).isEqualTo(403);
+        assertThat(code(t, "PUT", "/api/sys/users/1/roles", "{\"ids\":[]}")).as("非管理员移除 ADMIN").isEqualTo(403);
+        // 非 ADMIN 角色可以分配
+        Role plain = role("PLAIN");
+        assertThat(code(t, "PUT", "/api/sys/users/" + target.id() + "/roles", "{\"ids\":[" + plain.id() + "]}")).isZero();
+        // 管理员可以分配 ADMIN，然后再收回
+        ok(admin, "PUT", "/api/sys/users/" + target.id() + "/roles", "{\"ids\":[1]}");
+        ok(admin, "PUT", "/api/sys/users/" + target.id() + "/roles", "{\"ids\":[]}");
+    }
+
     @Test void usernameUniqueIncludingDeletedAndValidation() throws Exception {
         User u = user();
         String body = "{\"username\":\"" + u.username() + "\",\"password\":\"" + PW + "\"}";

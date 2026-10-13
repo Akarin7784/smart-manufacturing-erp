@@ -15,6 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -134,6 +135,68 @@ class WorkflowIntegrationTest extends SysTestSupport {
         assertThat(ok(bt, "GET", "/api/workflow/approvals?bizId=" + o.id(), null).size()).isGreaterThanOrEqualTo(2);
         decide(m1.token(this), ap2, false);
         assertThat(status(bt, o.id())).isEqualTo("DRAFT");
+    }
+
+    @Test void countersignListFrozenAtStart() throws Exception {
+        String bt = buyer.token(this);
+        Order o = submitOrder(bt, "1", "1");
+        decide(m1.token(this), o.approvalId(), true);
+        // 提交后再加入财务角色的人不在会签名单里
+        User late = user(fin);
+        assertThat(decide(late.token(this), o.approvalId(), true).path("code").asInt()).isEqualTo(403);
+        assertThat(todo(late.token(this))).doesNotContain(o.approvalId());
+        decide(f1.token(this), o.approvalId(), true);
+        assertThat(status(bt, o.id())).as("仍需名单内的 f2").isEqualTo("PENDING");
+        decide(f2.token(this), o.approvalId(), true);
+        assertThat(status(bt, o.id())).isEqualTo("APPROVED");
+    }
+
+    @Test void applicantCannotApproveOwnOrderEvenWithRole() throws Exception {
+        Role mixed = role("MIX", "purchase:write");
+        User self = user(mixed, mgr);                      // 既是申请人又有经理角色
+        Order o = submitOrder(self.token(this), "1", "1");
+        assertThat(decide(self.token(this), o.approvalId(), true).path("code").asInt()).isEqualTo(403);
+        assertThat(todo(self.token(this))).doesNotContain(o.approvalId());
+        assertThat(decide(m1.token(this), o.approvalId(), true).path("code").asInt()).isZero();
+        decide(f1.token(this), o.approvalId(), false);   // 收尾，避免遗留审批中实例
+        // 申请人不进会签名单：只有申请人自己具备某节点角色时提交被拒
+        Role solo = role("SOLO");
+        User only = user(mixed, solo);
+        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{\"name\":\"x\",\"nodes\":[{\"name\":\"唯一\",\"roleCode\":\"" + solo.code() + "\",\"approveMode\":\"ALL\"}]}");
+        long id = ok(only.token(this), "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":1,\"price\":1}]}").path("order").path("id").asLong();
+        JsonNode r = call(only.token(this), "POST", "/api/purchase/orders/" + id + "/submit", null);
+        assertThat(r.path("code").asInt()).isEqualTo(400);
+        assertThat(r.path("msg").asText()).contains("没有可用审批人");
+    }
+
+    @Test void concurrentDuplicateDecisionRecordedOnce() throws Exception {
+        String bt = buyer.token(this);
+        for (int round = 0; round < 3; round++) {
+            Order o = submitOrder(bt, "1", "1");
+            decide(m1.token(this), o.approvalId(), true);
+            String ft = f1.token(this);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CountDownLatch ready = new CountDownLatch(2), go = new CountDownLatch(1);
+            List<Future<Integer>> fs = new ArrayList<>();
+            try {
+                for (int k = 0; k < 2; k++)
+                    fs.add(pool.submit(() -> { ready.countDown(); go.await(); return decide(ft, o.approvalId(), true).path("code").asInt(); }));
+                assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+                go.countDown();
+                List<Integer> codes = new ArrayList<>();
+                for (Future<Integer> f : fs) codes.add(f.get(30, TimeUnit.SECONDS));
+                assertThat(codes).containsOnlyOnce(0).allMatch(c -> c == 0 || c == 400 || c == 40900);
+            } finally {
+                pool.shutdownNow();
+            }
+            JsonNode d = ok(bt, "GET", "/api/workflow/approvals/" + o.approvalId(), null);
+            long f1Records = 0;
+            for (JsonNode r : d.path("records")) if (r.path("approver").asText().equals(f1.username())) f1Records++;
+            assertThat(f1Records).isEqualTo(1);
+            assertThat(d.path("instance").path("status").asText()).isEqualTo("PENDING");
+            decide(f2.token(this), o.approvalId(), false);
+        }
     }
 
     @Test void definitionAdmin() throws Exception {

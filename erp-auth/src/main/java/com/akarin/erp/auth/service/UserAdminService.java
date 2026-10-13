@@ -110,6 +110,9 @@ public class UserAdminService {
         List<SysRole> roles = ids.isEmpty() ? List.of() : roleMapper.selectBatchIds(ids);
         if (roles.size() != ids.size()) throw new BizException(ErrorCode.NOT_FOUND, "角色不存在");
         boolean keepsAdmin = roles.stream().anyMatch(r -> ADMIN_ROLE.equals(r.getCode()));
+        boolean wasAdmin = userMapper.selectRoleCodes(u.getId()).contains(ADMIN_ROLE);
+        if (keepsAdmin != wasAdmin && !SecurityUtils.currentAuthorities().contains("ROLE_" + ADMIN_ROLE))
+            throw new BizException(ErrorCode.FORBIDDEN, "只有管理员能分配或移除 ADMIN 角色");
         if (!keepsAdmin) guardLastAdmin(u, "移除管理员角色");
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, u.getId()));
         ids.forEach(rid -> userRoleMapper.insert(new SysUserRole(u.getId(), rid)));

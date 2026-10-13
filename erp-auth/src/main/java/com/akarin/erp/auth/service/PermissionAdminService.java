@@ -47,7 +47,8 @@ public class PermissionAdminService {
 
     @Transactional
     public void delete(Long id) {
-        require(id);
+        SysPermission p = require(id);
+        if (BuiltinPermissions.CODES.contains(p.getCode())) throw new BizException("内置权限点不能删除: " + p.getCode());
         List<Long> roleIds = rolePermissionMapper.selectList(new LambdaQueryWrapper<SysRolePermission>()
                 .eq(SysRolePermission::getPermissionId, id)).stream().map(SysRolePermission::getRoleId).toList();
         roleIds.forEach(userMapper::bumpTokenVersionByRole);

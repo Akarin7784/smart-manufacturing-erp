@@ -40,6 +40,12 @@ public class SecurityConfig {
         res.getWriter().write("{\"code\":" + ec.getCode() + ",\"msg\":\"" + ec.getDefaultMsg() + "\",\"data\":null}");
     }
 
+    /** ROLE_ADMIN 对所有 hasAuthority 放行 */
+    @Bean
+    static org.springframework.security.access.expression.method.MethodSecurityExpressionHandler methodSecurityExpressionHandler() {
+        return new AdminBypassExpressionHandler();
+    }
+
     @Bean
     public PasswordEncoder passwordEncoder() { return new BCryptPasswordEncoder(); }
 }

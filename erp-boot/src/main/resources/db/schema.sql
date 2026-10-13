@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS wf_approval_instance (
   comment VARCHAR(255),
   amount DECIMAL(18,2),
   node_plan VARCHAR(512),
+  approver_snapshot VARCHAR(4000),
   current_index INT NOT NULL DEFAULT 0,
   version INT NOT NULL DEFAULT 0,
   finished_at DATETIME,
@@ -138,7 +139,7 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
   updated_at DATETIME,
   created_by VARCHAR(64),
   deleted TINYINT DEFAULT 0,
-  INDEX idx_record_instance (instance_id, node_index)
+  UNIQUE KEY uk_record_approver (instance_id, node_index, approver)
 );
 
 CREATE TABLE IF NOT EXISTS inv_stock (
