@@ -35,6 +35,7 @@ docker compose up -d
 SPRING_PROFILES_ACTIVE=mysql java -jar erp-boot/target/erp-boot-0.1.0-SNAPSHOT.jar
 ```
 表结构与初始数据由 `erp-boot/src/main/resources/db/schema.sql`、`data.sql` 自动初始化。
+H2 profile 内置演示主数据（`db/demo-data.sql`，MySQL 不加载）：物料 5 条（DM-M001~005）、客户 / 供应商 / 仓库各 3 条（DM-C/S/W），id 从 1 开始，可以直接用于下面的演示。
 默认账号 `admin / admin123`（可用 `ERP_ADMIN_PASSWORD` 覆盖），JWT 密钥用 `ERP_JWT_SECRET` 覆盖。
 
 ## 演示：采购收货全流程

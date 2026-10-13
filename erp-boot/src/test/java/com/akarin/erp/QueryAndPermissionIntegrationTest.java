@@ -32,6 +32,30 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         assertThat(ok(admin, "GET", "/api/finance/bills?sourceBizNo=NOPE", null).path("total").asInt()).isZero();
     }
 
+    @Test void unauthenticatedAndForbiddenReturnJsonBody() throws Exception {
+        var r401 = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/finance/bills")).andReturn().getResponse();
+        assertThat(r401.getStatus()).isEqualTo(401);
+        assertThat(r401.getContentType()).startsWith("application/json");
+        assertThat(om.readTree(r401.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)))
+                .isEqualTo(om.readTree("{\"code\":401,\"msg\":\"未登录或登录已失效\",\"data\":null}"));
+        // 无效 token 同样 401 + JSON
+        assertThat(call("not-a-jwt", "GET", "/api/finance/bills", null).path("msg").asText()).isEqualTo("未登录或登录已失效");
+
+        SysUser u = new SysUser();
+        u.setUsername(uniq("viewer")); u.setPassword(encoder.encode("pw123456")); u.setStatus(1);
+        userMapper.insert(u);
+        JsonNode r403 = call(login(u.getUsername(), "pw123456"), "GET", "/api/finance/bills", null);
+        assertThat(r403).isEqualTo(om.readTree("{\"code\":403,\"msg\":\"无权限\",\"data\":null}"));
+    }
+
+    @Test void demoMasterDataSeeded() throws Exception {
+        assertThat(ok(admin, "GET", "/api/mdm/materials?keyword=DM-M", null).path("total").asInt()).isEqualTo(5);
+        assertThat(ok(admin, "GET", "/api/mdm/customers?keyword=DM-C", null).path("total").asInt()).isEqualTo(3);
+        assertThat(ok(admin, "GET", "/api/mdm/suppliers?keyword=DM-S", null).path("total").asInt()).isEqualTo(3);
+        assertThat(ok(admin, "GET", "/api/mdm/warehouses?keyword=DM-W", null).path("total").asInt()).isEqualTo(3);
+        assertThat(code(admin, "POST", "/api/mdm/materials", "{\"code\":\"DM-M001\",\"name\":\"dup\"}")).isEqualTo(400);
+    }
+
     @Test void validationAndNotFound() throws Exception {
         assertThat(code(admin, "GET", "/api/finance/bills/999999", null)).isEqualTo(404);
         // 0.001 不满足 @DecimalMin(0.01)/@Digits(fraction=2)
