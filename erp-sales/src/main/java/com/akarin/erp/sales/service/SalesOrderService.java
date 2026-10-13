@@ -1,7 +1,11 @@
 package com.akarin.erp.sales.service;
 
 import com.akarin.erp.common.event.ApprovalFinishedEvent;
+import com.akarin.erp.common.event.StockBizCompletedEvent;
+import com.akarin.erp.common.util.Money;
+import org.springframework.context.ApplicationEventPublisher;
 import com.akarin.erp.common.exception.BizException;
+import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.common.util.NoGenerator;
 import com.akarin.erp.inventory.service.InventoryService;
 import com.akarin.erp.mdm.service.MaterialService;
@@ -34,6 +38,7 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
     private final WarehouseService warehouseService;
     private final ApprovalService approvalService;
     private final InventoryService inventoryService;
+    private final ApplicationEventPublisher publisher;
 
     @Transactional
     public SalesOrderDetail create(SalesOrderCreateReq req) {
@@ -52,9 +57,9 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
             materialService.require(l.materialId());
             SalesOrderItem it = new SalesOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
-            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(l.qty().multiply(l.price()));
+            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));
             itemMapper.insert(it);
-            total = total.add(it.getAmount());
+            total = Money.of(total.add(it.getAmount()));
         }
         o.setTotalAmount(total);
         updateById(o);
@@ -95,12 +100,18 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
         SalesOrderDetail d = detail(id);
         if (!"APPROVED".equals(d.order().getStatus()))
             throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
+        // 带状态条件的更新：并发重复发货时只有一个请求能把 APPROVED 改成 SHIPPED，其余返回 409/40900
+        boolean moved = lambdaUpdate().set(SalesOrder::getStatus, "SHIPPED")
+                .eq(SalesOrder::getId, id).eq(SalesOrder::getStatus, "APPROVED").update();
+        if (!moved) throw new BizException(ErrorCode.CONCURRENT_MODIFICATION, "单据状态已变化，请刷新后重试");
+        d.order().setStatus("SHIPPED");
         for (var it : d.items()) {
             inventoryService.stockOut(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
                     "SALES_SHIPMENT", d.order().getOrderNo(), null);
         }
-        d.order().setStatus("SHIPPED");
-        updateById(d.order());
+        BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
+        publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.SALES_SHIPMENT,
+                d.order().getOrderNo(), d.order().getCustomerId(), amount));
         return d;
     }
 

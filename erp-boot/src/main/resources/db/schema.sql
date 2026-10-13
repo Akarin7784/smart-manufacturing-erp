@@ -234,8 +234,40 @@ CREATE TABLE IF NOT EXISTS fin_arap_bill (
   settled_amount DECIMAL(18,2) DEFAULT 0,
   status VARCHAR(16) NOT NULL,
   due_date DATE,
+  version INT NOT NULL DEFAULT 0,
   created_at DATETIME,
   updated_at DATETIME,
   created_by VARCHAR(64),
-  deleted TINYINT DEFAULT 0
+  deleted TINYINT DEFAULT 0,
+  UNIQUE (source_biz_type, source_biz_no),
+  INDEX idx_arap_partner (partner_id, bill_type)
+);
+
+CREATE TABLE IF NOT EXISTS fin_payment (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  payment_no VARCHAR(64) NOT NULL UNIQUE,
+  payment_type VARCHAR(16) NOT NULL,
+  partner_id BIGINT NOT NULL,
+  amount DECIMAL(18,2) NOT NULL,
+  applied_amount DECIMAL(18,2) NOT NULL DEFAULT 0,
+  paid_date DATE,
+  remark VARCHAR(255),
+  version INT NOT NULL DEFAULT 0,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_payment_partner (partner_id)
+);
+CREATE TABLE IF NOT EXISTS fin_settlement (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  request_no VARCHAR(64) NOT NULL UNIQUE,
+  payment_id BIGINT NOT NULL,
+  bill_id BIGINT NOT NULL,
+  amount DECIMAL(18,2) NOT NULL,
+  created_at DATETIME,
+  updated_at DATETIME,
+  created_by VARCHAR(64),
+  deleted TINYINT DEFAULT 0,
+  INDEX idx_settlement_bill (bill_id)
 );

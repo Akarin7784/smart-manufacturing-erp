@@ -78,6 +78,17 @@ class MdmRulesIntegrationTest extends SysTestSupport {
         ok(admin, "DELETE", "/api/mdm/warehouses/" + free, null);
     }
 
+    @Test void partnerReferencedByPaymentCannotBeDeleted() throws Exception {
+        long cus = mdm(admin, "customers", "C"), sup = mdm(admin, "suppliers", "S");
+        ok(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"RECEIPT\",\"partnerId\":" + cus + ",\"amount\":10}");
+        ok(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":10}");
+        for (String url : new String[]{"/api/mdm/customers/" + cus, "/api/mdm/suppliers/" + sup}) {
+            JsonNode r = call(admin, "DELETE", url, null);
+            assertThat(r.path("code").asInt()).as(url).isEqualTo(40901);
+            assertThat(r.path("msg").asText()).as(url).contains("收付款");
+        }
+    }
+
     void bill(String type, long partner) {
         ArapBill b = new ArapBill();
         b.setBillNo(uniq(type)); b.setBillType(type); b.setPartnerId(partner);
