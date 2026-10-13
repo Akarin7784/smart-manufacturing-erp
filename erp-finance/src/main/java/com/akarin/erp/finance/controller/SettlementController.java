@@ -39,7 +39,13 @@ public class SettlementController {
 
     @PostMapping("/settlements")
     @PreAuthorize("hasAuthority('finance:write')")
-    public R<Settlement> settle(@Valid @RequestBody SettleReq req) { return R.ok(service.settle(req)); }
+    public R<Settlement> settle(@Valid @RequestBody SettleReq req) {
+        try {
+            return R.ok(service.settle(req));
+        } catch (com.akarin.erp.finance.service.DuplicateRequestNoException e) {
+            return R.ok(service.replaySettlement(req));   // settle 的事务已回滚，按幂等规则重放
+        }
+    }
 
     @PreAuthorize("hasAuthority('finance:read')")
     @GetMapping("/settlements")

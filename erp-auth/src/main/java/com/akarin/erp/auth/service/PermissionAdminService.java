@@ -32,7 +32,11 @@ public class PermissionAdminService {
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + req.code());
         SysPermission p = new SysPermission();
         p.setCode(req.code()); p.setName(req.name());
-        permissionMapper.insert(p);
+        try {
+            permissionMapper.insert(p);
+        } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
+            throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在: " + req.code());
+        }
         return p;
     }
 

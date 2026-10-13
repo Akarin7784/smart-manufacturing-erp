@@ -168,7 +168,7 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 | HTTP 状态 | code | 含义 | 触发场景 |
 |---|---|---|---|
 | 400 | 400 | 参数或业务校验失败 | 所有接口的 `@Valid` 校验失败（例如 `POST /api/finance/settlements` 金额 <0.01 或超过 2 位小数），请求体格式错误、参数类型错误；业务规则不满足：`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 时订单状态不是 APPROVED，`POST /api/inventory/out` 或发货时库存不足，`POST /api/finance/settlements` 超额核销、核销已核销的单据、收付款类型或往来单位不匹配 |
-| 400 | 40001 | 编码已存在（msg 以"编码已存在"开头） | `POST /api/mdm/{materials,customers,suppliers,warehouses}` 时编码重复 |
+| 400 | 40001 | 编码已存在（msg 以"编码已存在"开头） | `POST /api/mdm/{materials,customers,suppliers,warehouses}`、`POST /api/sys/{users,roles,permissions}` 时编码 / 用户名重复，**包括已逻辑删除的**；并发同编码创建撞唯一索引也返回这个码 |
 | 401 | 401 | 未登录或登录已失效 | 不带 token 或 token 无效时访问除 `/api/auth/login`、`/actuator/health` 以外的接口；`POST /api/auth/login` 用户名或密码错误 |
 | 403 | 403 | 无权限 | 缺少对应权限点，例如没有 `finance:read` 时调用 `GET /api/finance/*`，没有 `finance:write` 时调用 `POST /api/finance/payments`、`/settlements`；登录时账号已停用 |
 | 404 | 404 | 资源不存在 | 路径不存在；`GET /api/finance/bills/{id}` 查不到；核销时单据或收付款不存在 |
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 - 采购收货 / 销售发货完成后发布 `StockBizCompletedEvent`，财务同步监听（同一事务）生成 **应付 AP / 应收 AR**；金额 = Σ 数量×单价（BigDecimal，2 位，HALF_UP），按来源单号唯一，重复事件不重复生成。
 - 收付款：`PAYMENT` 付款（供应商）只能核销 AP，`RECEIPT` 收款（客户）只能核销 AR，往来单位必须一致。
 - 核销状态机：`OPEN 未核销 → PARTIAL 部分核销 → SETTLED 已核销`；核销金额不得超过单据余额，也不得超过收付款未核销余额。
-- 幂等：`requestNo` 唯一。同号同参数重放返回原结果；同号不同参数返回 409。
+- 幂等：`requestNo` 唯一。同号同参数重放返回原结果；同号不同参数返回 409/40902。并发同号提交撞唯一索引时，失败方回滚后按同样规则重放（同参返回原结果，不同参 40902）。
 - 并发：应收应付单、收付款都有 `@Version` 乐观锁；冲突时整笔回滚返回 409，由调用方重试。
 
 ```bash

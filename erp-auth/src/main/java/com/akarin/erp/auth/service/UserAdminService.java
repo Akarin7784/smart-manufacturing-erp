@@ -53,7 +53,11 @@ public class UserAdminService {
         u.setRealName(req.realName());
         u.setStatus(SysUser.ENABLED);
         u.setTokenVersion(0);
-        userMapper.insert(u);
+        try {
+            userMapper.insert(u);
+        } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
+            throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在: 用户名 " + req.username());
+        }
         if (req.roleIds() != null && !req.roleIds().isEmpty()) replaceRoles(u, req.roleIds());
         return view(u);
     }

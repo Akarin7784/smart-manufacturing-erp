@@ -34,7 +34,11 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + e.getCode());
         e.setId(null);
         if (e.getStatus() == null) e.setStatus(ENABLED);
-        save(e);
+        try {
+            save(e);
+        } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
+            throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在: " + e.getCode());
+        }
         return e;
     }
 

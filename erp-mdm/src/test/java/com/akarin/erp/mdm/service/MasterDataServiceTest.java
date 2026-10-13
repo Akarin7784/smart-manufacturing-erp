@@ -49,6 +49,12 @@ class MasterDataServiceTest {
                 .hasMessageStartingWith("编码已存在（含已删除）").extracting("errorCode").isEqualTo(ErrorCode.CODE_DUPLICATED);
     }
 
+    @Test void concurrentInsertDuplicateKeyMapsTo40001() {
+        when(mapper.insert(any(Material.class))).thenThrow(new org.springframework.dao.DuplicateKeyException("uk"));
+        assertThatThrownBy(() -> svc.create(m(null, "C"))).isInstanceOf(BizException.class)
+                .hasMessageStartingWith("编码已存在").extracting("errorCode").isEqualTo(ErrorCode.CODE_DUPLICATED);
+    }
+
     @Test void createDefaultsToEnabledAndIgnoresClientId() {
         Material x = svc.create(m(99L, "B"));
         assertThat(x.getStatus()).isEqualTo(MasterDataService.ENABLED);

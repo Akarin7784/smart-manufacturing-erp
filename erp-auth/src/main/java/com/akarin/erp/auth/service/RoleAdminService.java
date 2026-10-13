@@ -43,7 +43,11 @@ public class RoleAdminService {
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + req.code());
         SysRole r = new SysRole();
         r.setCode(req.code()); r.setName(req.name());
-        roleMapper.insert(r);
+        try {
+            roleMapper.insert(r);
+        } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
+            throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在: " + req.code());
+        }
         return view(r);
     }
 

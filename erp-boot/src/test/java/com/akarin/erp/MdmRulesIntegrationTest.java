@@ -9,6 +9,10 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -17,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @AutoConfigureMockMvc
 class MdmRulesIntegrationTest extends SysTestSupport {
     @Autowired ArapBillMapper billMapper;
+    @Autowired JdbcTemplate jdbc;
 
     @Test void codeImmutableAndValidation() throws Exception {
         String code = uniq("M");
@@ -86,6 +91,54 @@ class MdmRulesIntegrationTest extends SysTestSupport {
             JsonNode r = call(admin, "DELETE", url, null);
             assertThat(r.path("code").asInt()).as(url).isEqualTo(40901);
             assertThat(r.path("msg").asText()).as(url).contains("收付款");
+        }
+    }
+
+    @Test void recreateSoftDeletedCodeReturns40001() throws Exception {
+        long id = ok(admin, "GET", "/api/mdm/materials?keyword=DM-M001", null).path("records").get(0).path("id").asLong();
+        try {
+            ok(admin, "DELETE", "/api/mdm/materials/" + id, null);
+            JsonNode r = call(admin, "POST", "/api/mdm/materials", "{\"code\":\"DM-M001\",\"name\":\"again\"}");
+            assertThat(r.path("code").asInt()).isEqualTo(40001);
+            assertThat(r.path("msg").asText()).startsWith("编码已存在");
+        } finally {
+            jdbc.update("UPDATE mdm_material SET deleted = 0 WHERE id = ?", id);   // 还原演示数据，其他用例依赖它
+        }
+        // 用户名、角色编码、权限点编码：删除后再建同名 → 40001
+        String un = uniq("u"), rc = uniq("R").toUpperCase(), pc = uniq("p:x");
+        long uid = ok(admin, "POST", "/api/sys/users", "{\"username\":\"" + un + "\",\"password\":\"" + PW + "\"}").path("id").asLong();
+        long rid = ok(admin, "POST", "/api/sys/roles", "{\"code\":\"" + rc + "\",\"name\":\"x\"}").path("id").asLong();
+        long pid = ok(admin, "POST", "/api/sys/permissions", "{\"code\":\"" + pc + "\",\"name\":\"x\"}").path("id").asLong();
+        ok(admin, "DELETE", "/api/sys/users/" + uid, null);
+        ok(admin, "DELETE", "/api/sys/roles/" + rid, null);
+        ok(admin, "DELETE", "/api/sys/permissions/" + pid, null);
+        for (String[] c : new String[][]{{"/api/sys/users", "{\"username\":\"" + un + "\",\"password\":\"" + PW + "\"}"},
+                {"/api/sys/roles", "{\"code\":\"" + rc + "\",\"name\":\"x\"}"}, {"/api/sys/permissions", "{\"code\":\"" + pc + "\",\"name\":\"x\"}"}}) {
+            JsonNode r = call(admin, "POST", c[0], c[1]);
+            assertThat(r.path("code").asInt()).as(c[0]).isEqualTo(40001);
+            assertThat(r.path("msg").asText()).as(c[0]).startsWith("编码已存在");
+        }
+    }
+
+    @Test void concurrentSameCodeCreationReturns40001() throws Exception {
+        String[][] targets = {
+                {"/api/mdm/materials", "{\"code\":\"%s\",\"name\":\"x\"}"}, {"/api/mdm/customers", "{\"code\":\"%s\",\"name\":\"x\"}"},
+                {"/api/mdm/suppliers", "{\"code\":\"%s\",\"name\":\"x\"}"}, {"/api/mdm/warehouses", "{\"code\":\"%s\",\"name\":\"x\"}"},
+                {"/api/sys/users", "{\"username\":\"%s\",\"password\":\"" + PW + "\"}"},
+                {"/api/sys/roles", "{\"code\":\"%s\",\"name\":\"x\"}"}, {"/api/sys/permissions", "{\"code\":\"%s\",\"name\":\"x\"}"}};
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            for (String[] tg : targets) for (int round = 0; round < 3; round++) {
+                String body = String.format(tg[1], uniq("CC").toUpperCase());
+                CyclicBarrier go = new CyclicBarrier(4);
+                List<Future<Integer>> fs = new ArrayList<>();
+                for (int k = 0; k < 4; k++) fs.add(pool.submit(() -> { go.await(); return call(admin, "POST", tg[0], body).path("code").asInt(); }));
+                List<Integer> codes = new ArrayList<>();
+                for (Future<Integer> f : fs) codes.add(f.get(30, TimeUnit.SECONDS));
+                assertThat(codes).as(tg[0] + " " + codes).containsOnlyOnce(0).allMatch(c -> c == 0 || c == 40001);
+            }
+        } finally {
+            pool.shutdownNow();
         }
     }
 
