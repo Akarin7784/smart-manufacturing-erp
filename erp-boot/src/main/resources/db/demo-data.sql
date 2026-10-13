@@ -13,3 +13,8 @@ INSERT INTO mdm_supplier (code, name, contact, phone, status, deleted) SELECT 'D
 INSERT INTO mdm_warehouse (code, name, address, status, deleted) SELECT 'DM-W01', '原料仓', '一号厂房', 1, 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM mdm_warehouse WHERE code = 'DM-W01');
 INSERT INTO mdm_warehouse (code, name, address, status, deleted) SELECT 'DM-W02', '成品仓', '二号厂房', 1, 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM mdm_warehouse WHERE code = 'DM-W02');
 INSERT INTO mdm_warehouse (code, name, address, status, deleted) SELECT 'DM-W03', '备件仓', '三号厂房', 1, 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM mdm_warehouse WHERE code = 'DM-W03');
+-- 演示审批人：approver / approver123（只有审批权限，用来审批 admin 提交的单据；申请人不能审批自己的单据）
+INSERT INTO sys_role (code, name, deleted) SELECT 'APPROVER', '审批人', 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_role WHERE code = 'APPROVER');
+INSERT INTO sys_role_permission (role_id, permission_id) SELECT r.id, p.id FROM sys_role r, sys_permission p WHERE r.code = 'APPROVER' AND p.code = 'workflow:approve' AND NOT EXISTS (SELECT 1 FROM sys_role_permission x WHERE x.role_id = r.id AND x.permission_id = p.id);
+INSERT INTO sys_user (username, password, real_name, status, deleted) SELECT 'approver', '$2a$10$4UuTPD2J0IEG5FIN5KB2MeMDyEvpNvWqH9jByd4CV3oLxlu2ufnr6', '演示审批人', 1, 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_user WHERE username = 'approver');
+INSERT INTO sys_user_role (user_id, role_id) SELECT u.id, r.id FROM sys_user u, sys_role r WHERE u.username = 'approver' AND r.code = 'APPROVER' AND NOT EXISTS (SELECT 1 FROM sys_user_role x WHERE x.user_id = u.id AND x.role_id = r.id);

@@ -46,7 +46,13 @@ class FinanceFlowIntegrationTest {
     }
     long approveOrder(String type, long orderId) throws Exception {
         long approvalId = ok("POST", "/api/" + type + "/orders/" + orderId + "/submit", null).path("approvalId").asLong();
-        ok("POST", "/api/workflow/approvals/" + approvalId + "/decide", "{\"approved\":true}");
+        String applicant = token;   // 申请人不能审批自己的单据，换演示审批人
+        token = call("POST", "/api/auth/login", "{\"username\":\"approver\",\"password\":\"approver123\"}", false).path("data").path("token").asText();
+        try {
+            ok("POST", "/api/workflow/approvals/" + approvalId + "/decide", "{\"approved\":true}");
+        } finally {
+            token = applicant;
+        }
         return approvalId;
     }
     JsonNode billBySource(String orderNo) throws Exception {

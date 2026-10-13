@@ -149,7 +149,19 @@ class FinanceServiceTest {
         when(paymentMapper.selectById(20L)).thenReturn(pay(Payment.PAYMENT, 3, "100"));
         when(settlementMapper.insert(any(Settlement.class))).thenThrow(new DuplicateKeyException("dup"));
         assertThatThrownBy(() -> svc.settle(new SettleReq("R1", 20L, 10L, BigDecimal.ONE)))
-                .isInstanceOf(BizException.class).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
+                .isInstanceOf(DuplicateRequestNoException.class).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
+    }
+
+    @Test void replayAfterDuplicateRequestNo() {
+        Settlement done = new Settlement();
+        done.setRequestNo("R1"); done.setBillId(10L); done.setPaymentId(20L); done.setAmount(new BigDecimal("5.00"));
+        when(settlementMapper.selectOne(any())).thenReturn(done);
+        assertThat(svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("5")))).isSameAs(done);
+        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, new BigDecimal("6"))))
+                .extracting("errorCode").isEqualTo(ErrorCode.IDEMPOTENCY_KEY_REUSED);
+        when(settlementMapper.selectOne(any())).thenReturn(null);
+        assertThatThrownBy(() -> svc.replaySettlement(new SettleReq("R1", 20L, 10L, BigDecimal.ONE)))
+                .extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
     }
 
     @Test void optimisticLockConflict() {

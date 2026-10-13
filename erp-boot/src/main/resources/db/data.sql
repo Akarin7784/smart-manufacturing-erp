@@ -16,3 +16,9 @@ INSERT INTO sys_role_permission (role_id, permission_id) SELECT 1, 6 FROM DUAL W
 INSERT INTO sys_user_role (user_id, role_id) SELECT 1, 1 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_user_role WHERE user_id = 1 AND role_id = 1);
 INSERT INTO sys_permission (id, code, name, deleted) SELECT 7, 'finance:read', '财务查询', 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_permission WHERE id = 7);
 INSERT INTO sys_role_permission (role_id, permission_id) SELECT 1, 7 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_role_permission WHERE role_id = 1 AND permission_id = 7);
+INSERT INTO sys_permission (id, code, name, deleted) SELECT 8, 'sys:read', '系统管理查询', 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_permission WHERE id = 8);
+INSERT INTO sys_role_permission (role_id, permission_id) SELECT 1, 8 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_role_permission WHERE role_id = 1 AND permission_id = 8);
+INSERT INTO sys_permission (id, code, name, deleted) SELECT 9, 'sys:write', '系统管理维护', 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_permission WHERE id = 9);
+INSERT INTO sys_role_permission (role_id, permission_id) SELECT 1, 9 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_role_permission WHERE role_id = 1 AND permission_id = 9);
+INSERT INTO sys_permission (id, code, name, deleted) SELECT 10, 'workflow:admin', '流程配置', 0 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_permission WHERE id = 10);
+INSERT INTO sys_role_permission (role_id, permission_id) SELECT 1, 10 FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_role_permission WHERE role_id = 1 AND permission_id = 10);
