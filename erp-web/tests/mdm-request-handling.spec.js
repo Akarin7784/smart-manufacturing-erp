@@ -113,7 +113,7 @@ describe('1) 去重 / force / AbortController', () => {
 describe('2) 40900 自动刷新', () => {
   it('编辑保存 40900：关闭弹窗、emit stale', async () => {
     const pinia = createPinia(); setActivePinia(pinia)
-    updateMdm.mockImplementation(() => reject(new BizError(ErrorCode.CONCURRENT_MODIFIED, '数据已被修改，请刷新重试', 409)))
+    updateMdm.mockImplementation(() => reject(new BizError(ErrorCode.CONCURRENT_MODIFIED, '数据已被修改，请刷新后重试', 409)))
     const d = mount(MdmFormDialog, { props: { modelValue: true, resource: 'customers', row: { id: 2, code: 'C1', name: 'c', status: 1 } }, global: { plugins: [pinia] }, attachTo: document.body })
     await settle()
     await d.vm.onSave(); await settle()
