@@ -31,3 +31,27 @@ export async function uiLogin(page, username, password) {
 }
 
 export const uniq = (p) => `${p}${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`
+
+const MDM_EXTRA = { materials: { unit: '个' }, customers: {}, suppliers: {}, warehouses: {} }
+
+/** 新建一条主数据（编码带时间戳），断言 200/0 且新行 version 为 0，返回 data */
+export async function makeMdm(request, token, res, name = 'e2e') {
+  const r = await api(request, 'POST', `/api/mdm/${res}`, {
+    token, data: { code: uniq(`E2E-${res.slice(0, 3).toUpperCase()}-`), name, ...MDM_EXTRA[res] }
+  })
+  expectCode(r, 200, 0)
+  expect(r.body.data.version).toBe(0)
+  return r.body.data
+}
+
+/** 每个测试自建一套主数据，不依赖种子 id */
+export async function makeFixture(request, token) {
+  const [supplier, warehouse, material, material2, customer] = [
+    await makeMdm(request, token, 'suppliers'),
+    await makeMdm(request, token, 'warehouses'),
+    await makeMdm(request, token, 'materials'),
+    await makeMdm(request, token, 'materials'),
+    await makeMdm(request, token, 'customers')
+  ]
+  return { supplierId: supplier.id, warehouseId: warehouse.id, materialId: material.id, material2Id: material2.id, customerId: customer.id }
+}
