@@ -106,11 +106,16 @@ jobs:
           MYSQL_PASSWORD: erp123
         run: |
           nohup java -jar erp-boot/target/erp-boot-*.jar > app.log 2>&1 &
+          # 就绪探测：/actuator/health 免登录，返回 200 且 status=UP 即就绪
+          ready=false
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/mdm/materials || true)
-            [ "$code" != "000" ] && break
+            body=$(curl -s http://localhost:8080/actuator/health || true)
+            if echo "$body" | grep -q '"status":"UP"'; then ready=true; break; fi
             sleep 2
           done
+          echo "health: $body"
+          test "$ready" = "true"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/mdm/materials)
           echo "unauthenticated status: $code"
           test "$code" = "401"
       - name: Login smoke (admin via JWT)
@@ -118,6 +123,11 @@ jobs:
           resp=$(curl -s -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin123"}')
           echo "$resp" | head -c 120; echo
           echo "$resp" | grep -q '"token"'
+          token=$(echo "$resp" | sed -E 's/.*"token":"([^"]+)".*/\1/')
+          # MySQL profile 不加载 H2 演示主数据（DM-*）
+          demo=$(curl -s "http://localhost:8080/api/mdm/materials?keyword=DM-" -H "Authorization: Bearer $token")
+          echo "$demo" | head -c 200; echo
+          echo "$demo" | grep -q '"total":0'
       - name: App log
         if: always()
         run: tail -n 200 app.log || true
