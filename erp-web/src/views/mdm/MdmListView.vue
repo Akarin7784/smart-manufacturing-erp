@@ -42,7 +42,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteMdm, pageMdm } from '@/api/mdm'
 import { useAuthStore } from '@/stores/auth'
 import MdmFormDialog from './MdmFormDialog.vue'
-import { deleteErrorText } from '@/utils/mdmErrors'
 import { MDM_RESOURCES } from '@/config/mdm'
 import { formatDateTime } from '@/utils/format'
 
@@ -73,14 +72,14 @@ async function onDelete(row) {
     return
   }
   try {
-    // silent：避免拦截器通用 409 提示与此处的引用提示重复
-    await deleteMdm(props.resource, row.id, { silent: true })
+    // 失败提示由拦截器按业务码统一给出（如 40901 被引用 -> 建议改为停用），此处不再重复提示
+    await deleteMdm(props.resource, row.id)
     ElMessage.success('删除成功')
     // 当前页删空时回退一页
     if (records.value.length === 1 && page.value > 1) page.value -= 1
     await load()
-  } catch (e) {
-    ElMessage.error(deleteErrorText(e))
+  } catch {
+    // 已提示；e.code 为业务子码，e.status 为 HTTP 类别
   }
 }
 

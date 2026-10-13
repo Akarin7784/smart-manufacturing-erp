@@ -24,7 +24,6 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createMdm, updateMdm } from '@/api/mdm'
 import { MDM_FORMS, MDM_RESOURCES } from '@/config/mdm'
-import { createErrorText } from '@/utils/mdmErrors'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -74,20 +73,12 @@ async function onSave() {
   saving.value = true
   try {
     if (isEdit.value) await updateMdm(props.resource, props.row.id, payload())
-    else {
-      try {
-        // silent：由本组件给出更明确的提示（编码重复含已删除）
-        await createMdm(props.resource, payload(), { silent: true })
-      } catch (e) {
-        ElMessage.error(createErrorText(e))
-        throw e
-      }
-    }
+    else await createMdm(props.resource, payload())
     ElMessage.success('保存成功')
     emit('update:modelValue', false)
     emit('saved')
   } catch {
-    // 错误已提示（新增由本组件提示；编辑由拦截器提示），保留弹窗便于修改重试
+    // 拦截器已按业务码提示（40001 编码已存在含已删除、40900 并发冲突等），保留弹窗便于修改重试，保留弹窗便于修改重试
   } finally {
     saving.value = false
   }

@@ -7,7 +7,7 @@ import { pageMdm, createMdm, updateMdm, deleteMdm } from '@/api/mdm'
 import { useAuthStore } from '@/stores/auth'
 import { MDM_FORMS } from '@/config/mdm'
 import { BizError } from '@/utils/request'
-import { DUP_CODE_MSG, REFERENCED_MSG, createErrorText, deleteErrorText } from '@/utils/mdmErrors'
+import { ErrorCode, ERROR_MESSAGES } from '@/api/errorCodes'
 
 vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), createMdm: vi.fn(), updateMdm: vi.fn(), deleteMdm: vi.fn() }))
 
@@ -64,7 +64,7 @@ describe('列表页新增/编辑/删除', () => {
     pageMdm.mockClear()
     await w.vm.onDelete(rows[0]); await flushPromises()
     expect(ElMessageBox.confirm.mock.calls[0][0]).toContain('螺丝')
-    expect(deleteMdm).toHaveBeenCalledWith('materials', 7, { silent: true })
+    expect(deleteMdm).toHaveBeenCalledWith('materials', 7)
     expect(pageMdm).toHaveBeenCalledTimes(1)
   })
   it('删除最后一条且非首页时回退一页', async () => {
@@ -98,48 +98,23 @@ describe('列表页新增/编辑/删除', () => {
   })
 })
 
-describe('业务错误提示', () => {
-  it('删除 409：提示改为停用，且只提示一次', async () => {
+describe('业务错误（页面不再重复提示）', () => {
+  it('删除 40901：页面不额外弹错误，不刷新', async () => {
     vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
-    deleteMdm.mockImplementation(failWith(new BizError(409, '数据已被他人修改，请刷新后重试')))
+    deleteMdm.mockImplementation(failWith(new BizError(ErrorCode.REFERENCED, ERROR_MESSAGES[40901], 409)))
     const w = mountList(); await flushPromises()
+    pageMdm.mockClear()
     await w.vm.onDelete(rows[0]); await flushPromises()
-    expect(ElMessage.error).toHaveBeenCalledTimes(1)
-    expect(ElMessage.error).toHaveBeenCalledWith(REFERENCED_MSG)
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(pageMdm).not.toHaveBeenCalled()
   })
-  it('删除其他错误显示原因', async () => {
-    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue('confirm')
-    deleteMdm.mockImplementation(failWith(new BizError(403, '没有权限执行此操作')))
-    const w = mountList(); await flushPromises()
-    await w.vm.onDelete(rows[0]); await flushPromises()
-    expect(ElMessage.error).toHaveBeenCalledWith('没有权限执行此操作')
-  })
-  it('新增编码重复提示含已删除，弹窗保持', async () => {
-    createMdm.mockImplementation(failWith(new BizError(400, '编码已存在: M1')))
+  it('新增 40001：弹窗保持、页面不额外弹错误', async () => {
+    createMdm.mockImplementation(failWith(new BizError(ErrorCode.DUPLICATE_CODE, ERROR_MESSAGES[40001], 400)))
     const w = mountForm(); await flushPromises()
     Object.assign(w.vm.form, { code: 'M1', name: 'n' })
     await w.vm.onSave(); await flushPromises()
-    expect(ElMessage.error).toHaveBeenCalledTimes(1)
-    expect(ElMessage.error).toHaveBeenCalledWith(DUP_CODE_MSG)
+    expect(ElMessage.error).not.toHaveBeenCalled()
     expect(w.emitted('saved')).toBeFalsy()
-  })
-  it('新增其他错误原样提示', async () => {
-    createMdm.mockImplementation(failWith(new BizError(403, '没有权限执行此操作')))
-    const w = mountForm(); await flushPromises()
-    Object.assign(w.vm.form, { code: 'M1', name: 'n' })
-    await w.vm.onSave(); await flushPromises()
-    expect(ElMessage.error).toHaveBeenCalledWith('没有权限执行此操作')
-  })
-  it('错误文案函数兜底', () => {
-    expect(createErrorText(undefined)).toBe('保存失败')
-    expect(deleteErrorText(undefined)).toBe('删除失败')
-    expect(deleteErrorText({ code: 409 })).toBe(REFERENCED_MSG)
-  })
-  it('真实拦截器 silent 下 409 不重复弹通用提示', async () => {
-    const { onRejected, MSG } = await import('@/utils/request')
-    setup()
-    await expect(onRejected({ config: { silent: true }, response: { status: 409, data: {} } })).rejects.toMatchObject({ code: 409 })
-    expect(ElMessage.error).not.toHaveBeenCalledWith(MSG.conflict)
   })
 })
 
@@ -169,7 +144,7 @@ describe('MdmFormDialog', () => {
     const w = mountForm(); await flushPromises()
     Object.assign(w.vm.form, { code: ' M100 ', name: '垫片', spec: '', status: 0 })
     await w.vm.onSave(); await flushPromises()
-    expect(createMdm).toHaveBeenCalledWith('materials', { code: 'M100', name: '垫片', spec: null, unit: null, category: null, status: 0 }, { silent: true })
+    expect(createMdm).toHaveBeenCalledWith('materials', { code: 'M100', name: '垫片', spec: null, unit: null, category: null, status: 0 })
     expect(w.emitted('update:modelValue').at(-1)).toEqual([false])
     expect(w.emitted('saved')).toBeTruthy()
   })
