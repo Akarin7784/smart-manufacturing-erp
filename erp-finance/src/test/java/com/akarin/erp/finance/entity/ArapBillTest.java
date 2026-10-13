@@ -42,12 +42,12 @@ class ArapBillTest {
         assertThatThrownBy(() -> b.settle(BigDecimal.ONE)).isInstanceOf(BizException.class).hasMessageContaining("已核销");
     }
 
-    @Test void amountRoundedBeforeValidation() {
+    @Test void moreThanTwoDecimalsRejectedNotRounded() {
         ArapBill b = bill("10");
-        assertThatThrownBy(() -> b.settle(new BigDecimal("0.001"))).isInstanceOf(BizException.class).hasMessageContaining("0.01");
-        assertThatThrownBy(() -> b.settle(new BigDecimal("0.004"))).isInstanceOf(BizException.class);
+        assertThatThrownBy(() -> b.settle(new BigDecimal("0.001"))).isInstanceOf(BizException.class).hasMessage("核销金额最多 2 位小数");
+        assertThatThrownBy(() -> b.settle(new BigDecimal("0.005"))).as("不再四舍五入成 0.01").hasMessage("核销金额最多 2 位小数");
         assertThat(b.getStatus()).isEqualTo(ArapBill.OPEN);
-        b.settle(new BigDecimal("0.005"));               // HALF_UP → 0.01
+        b.settle(new BigDecimal("0.01"));
         assertThat(b.getSettledAmount()).isEqualByComparingTo("0.01");
         assertThat(b.getStatus()).isEqualTo(ArapBill.PARTIAL);
     }

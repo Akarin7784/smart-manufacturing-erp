@@ -39,4 +39,5 @@ erp:
     secret: ${ERP_JWT_SECRET:change-me-please-this-is-a-dev-only-secret-32bytes}
     expire-minutes: 120
   init:
-    admin-password: ${ERP_ADMIN_PASSWORD:admin123}
+    # 首次启动时 admin 的初始密码；MySQL 等非 H2 profile 必须通过 ERP_ADMIN_PASSWORD 或该配置显式提供
+    admin-password: ${ERP_ADMIN_PASSWORD:}

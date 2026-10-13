@@ -14,7 +14,7 @@ public enum ErrorCode {
     FORBIDDEN(403, 403, "无权限"),
     NOT_FOUND(404, 404, "资源不存在"),
     METHOD_NOT_ALLOWED(405, 405, "请求方法不支持"),
-    CONCURRENT_MODIFICATION(409, 40900, "数据已被并发修改，请重试"),
+    CONCURRENT_MODIFICATION(409, 40900, "数据已被修改，请刷新后重试"),
     MASTER_DATA_REFERENCED(409, 40901, "主数据已被单据引用，不能删除，只能停用"),
     IDEMPOTENCY_KEY_REUSED(409, 40902, "请求号已被使用且参数不一致"),
     INTERNAL_ERROR(500, 500, "系统异常");

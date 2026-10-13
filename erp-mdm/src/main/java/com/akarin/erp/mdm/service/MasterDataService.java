@@ -66,7 +66,14 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
 
     public E require(Long id) {
         E e = getById(id);
-        if (e == null) throw new BizException(ErrorCode.NOT_FOUND, type() + " 不存在: " + id);
+        if (e == null) throw new BizException(ErrorCode.NOT_FOUND, type().label() + "不存在: " + id);
+        return e;
+    }
+
+    /** 请求体里引用的主数据：不存在返回 400（路径里的资源不存在才是 404） */
+    public E requireRef(Long id) {
+        E e = id == null ? null : getById(id);
+        if (e == null) throw new BizException(ErrorCode.BAD_REQUEST, type().label() + "不存在: " + id);
         return e;
     }
 }

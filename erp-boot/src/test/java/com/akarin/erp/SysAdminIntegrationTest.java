@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Autowired;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
@@ -80,21 +83,45 @@ class SysAdminIntegrationTest extends SysTestSupport {
         assertThat(code(admin, "GET", "/api/auth/me", null)).isZero();
     }
 
-    @Test void adminNotLockedOutWhenAdminPermissionsCleared() throws Exception {
-        JsonNode role = ok(admin, "GET", "/api/sys/roles/1", null);
-        StringBuilder orig = new StringBuilder();
-        for (JsonNode id : role.path("permissionIds")) orig.append(orig.length() == 0 ? "" : ",").append(id.asLong());
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test void adminRolePermissionsCannotBeChanged() throws Exception {
+        for (String body : new String[]{"{\"ids\":[]}", "{\"ids\":[" + permIds.get("sys:read") + "]}"}) {
+            JsonNode r = call(admin, "PUT", "/api/sys/roles/1/permissions", body);
+            assertThat(r.path("code").asInt()).as(body).isEqualTo(400);
+            assertThat(r.path("msg").asText()).isEqualTo("ADMIN 角色权限不可修改");
+        }
+        assertThat(ok(admin, "GET", "/api/sys/roles/1", null).path("permissionIds").size()).as("未被修改").isGreaterThanOrEqualTo(10);
+    }
+
+    @Test void adminNotLockedOutEvenIfAdminPermissionRowsMissing() throws Exception {
+        // API 已不允许修改 ADMIN 权限；这里直接改库模拟数据被清空，验证 ROLE_ADMIN 兜底放行
+        List<java.util.Map<String, Object>> orig = jdbc.queryForList("SELECT role_id, permission_id FROM sys_role_permission WHERE role_id = 1");
         try {
-            ok(admin, "PUT", "/api/sys/roles/1/permissions", "{\"ids\":[]}");
+            jdbc.update("DELETE FROM sys_role_permission WHERE role_id = 1");
             String t = login("admin", "admin123");
-            JsonNode me = ok(t, "GET", "/api/auth/me", null);
-            assertThat(me.path("authorities").toString()).doesNotContain("sys:read").contains("ROLE_ADMIN");
+            assertThat(ok(t, "GET", "/api/auth/me", null).path("authorities").toString()).doesNotContain("sys:read").contains("ROLE_ADMIN");
             assertThat(code(t, "GET", "/api/sys/users", null)).isZero();
             assertThat(code(t, "POST", "/api/sys/roles", "{\"code\":\"" + uniq("LOCK").toUpperCase() + "\",\"name\":\"x\"}")).isZero();
             assertThat(code(t, "POST", "/api/mdm/materials", "{\"code\":\"" + uniq("M") + "\",\"name\":\"x\"}")).isZero();
         } finally {
-            ok(login("admin", "admin123"), "PUT", "/api/sys/roles/1/permissions", "{\"ids\":[" + orig + "]}");
+            jdbc.update("DELETE FROM sys_role_permission WHERE role_id = 1");
+            for (var row : orig) jdbc.update("INSERT INTO sys_role_permission (role_id, permission_id) VALUES (?, ?)", row.get("role_id"), row.get("permission_id"));
         }
+    }
+
+    @Test void roleAndPermissionUpdateCodeOptional() throws Exception {
+        String rc = uniq("RU").toUpperCase(), pc = uniq("pu:x");
+        long rid = ok(admin, "POST", "/api/sys/roles", "{\"code\":\"" + rc + "\",\"name\":\"a\"}").path("id").asLong();
+        long pid = ok(admin, "POST", "/api/sys/permissions", "{\"code\":\"" + pc + "\",\"name\":\"a\"}").path("id").asLong();
+        assertThat(ok(admin, "PUT", "/api/sys/roles/" + rid, "{\"name\":\"b\"}").path("code").asText()).isEqualTo(rc);
+        assertThat(ok(admin, "PUT", "/api/sys/permissions/" + pid, "{\"name\":\"b\"}").path("code").asText()).isEqualTo(pc);
+        assertThat(code(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"" + rc + "\",\"name\":\"c\"}")).isZero();
+        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"" + pc + "\",\"name\":\"c\"}")).isZero();
+        assertThat(call(admin, "PUT", "/api/sys/roles/" + rid, "{\"code\":\"ZZ\",\"name\":\"d\"}").path("msg").asText()).isEqualTo("角色编码不可修改");
+        assertThat(code(admin, "PUT", "/api/sys/permissions/" + pid, "{\"code\":\"zz\",\"name\":\"d\"}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/sys/roles", "{\"name\":\"x\"}")).as("创建仍必填").isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/sys/permissions", "{\"name\":\"x\"}")).isEqualTo(400);
     }
 
     @Test void builtinPermissionsCannotBeDeleted() throws Exception {

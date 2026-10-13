@@ -42,8 +42,8 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
 
     @Transactional
     public SalesOrderDetail create(SalesOrderCreateReq req) {
-        customerService.require(req.customerId());
-        warehouseService.require(req.warehouseId());
+        customerService.requireRef(req.customerId());
+        warehouseService.requireRef(req.warehouseId());
         SalesOrder o = new SalesOrder();
         o.setOrderNo(NoGenerator.next("SO"));
         o.setCustomerId(req.customerId());
@@ -54,7 +54,7 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
         save(o);
         BigDecimal total = BigDecimal.ZERO;
         for (var l : req.items()) {
-            materialService.require(l.materialId());
+            materialService.requireRef(l.materialId());
             SalesOrderItem it = new SalesOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
             it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));

@@ -10,5 +10,5 @@ public record DefinitionReq(@NotBlank @Size(max = 64) String name, Boolean enabl
     public record Node(@NotBlank @Size(max = 64) String name,
                        @NotBlank @Size(max = 64) String roleCode,
                        @NotBlank @Pattern(regexp = "ALL|ANY", message = "只能是 ALL（会签）或 ANY（或签）") String approveMode,
-                       @DecimalMin("0") BigDecimal minAmount) {}
+                       @DecimalMin(value = "0", message = "金额条件不能为负数") BigDecimal minAmount) {}
 }

@@ -48,6 +48,47 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
         assertThat(r403).isEqualTo(om.readTree("{\"code\":403,\"msg\":\"无权限\",\"data\":null}"));
     }
 
+    @Test void amountValidationMessagesAreChinese() throws Exception {
+        String[][] cases = {
+                {"/api/finance/settlements", "{\"requestNo\":\"a1\",\"paymentId\":1,\"billId\":1,\"amount\":1.234}", "核销金额最多 2 位小数、16 位整数"},
+                {"/api/finance/settlements", "{\"requestNo\":\"a2\",\"paymentId\":1,\"billId\":1,\"amount\":0.001}", "核销金额"},
+                {"/api/finance/settlements", "{\"requestNo\":\"a3\",\"paymentId\":1,\"billId\":1}", "核销金额不能为空"},
+                {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":10.005}", "收付款金额最多 2 位小数、16 位整数"},
+                {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":0}", "收付款金额必须 ≥ 0.01"},
+                {"/api/purchase/orders", "{\"supplierId\":1,\"warehouseId\":1,\"items\":[{\"materialId\":1,\"qty\":1,\"price\":-1}]}", "单价不能为负数"},
+                {"/api/sales/orders", "{\"customerId\":1,\"warehouseId\":1,\"items\":[{\"materialId\":1,\"qty\":0,\"price\":1}]}", "数量必须大于 0"}};
+        for (String[] c : cases) {
+            JsonNode r = call(admin, "POST", c[0], c[1]);
+            assertThat(r.path("code").asInt()).as(c[1]).isEqualTo(400);
+            assertThat(r.path("msg").asText()).as(c[1]).startsWith(c[2]).doesNotContainPattern("[a-zA-Z]{4,}");
+        }
+    }
+
+    @Test void referencedObjectInBodyMissingIs400_pathResourceMissingIs404() throws Exception {
+        JsonNode r = call(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":999999,\"amount\":1}");
+        assertThat(r.path("code").asInt()).isEqualTo(400);
+        assertThat(r.path("msg").asText()).isEqualTo("供应商不存在: 999999");
+        assertThat(call(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"RECEIPT\",\"partnerId\":999999,\"amount\":1}").path("msg").asText()).isEqualTo("客户不存在: 999999");
+        assertThat(code(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"" + java.util.UUID.randomUUID() + "\",\"paymentId\":999999,\"billId\":999999,\"amount\":1}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/purchase/orders", "{\"supplierId\":999999,\"warehouseId\":1,\"items\":[{\"materialId\":1,\"qty\":1,\"price\":1}]}")).isEqualTo(400);
+        assertThat(code(admin, "POST", "/api/inventory/in", "{\"materialId\":999999,\"warehouseId\":1,\"qty\":1}")).isEqualTo(400);
+        assertThat(code(admin, "GET", "/api/mdm/suppliers/999999", null)).isEqualTo(404);
+        assertThat(code(admin, "GET", "/api/finance/bills/999999", null)).isEqualTo(404);
+    }
+
+    @Test void demoSeedMasterDataHasTimestamps() throws Exception {
+        for (String q : new String[]{"materials?keyword=DM-M", "customers?keyword=DM-C", "suppliers?keyword=DM-S", "warehouses?keyword=DM-W"})
+            for (JsonNode r : ok(admin, "GET", "/api/mdm/" + q, null).path("records")) {
+                assertThat(r.path("createdAt").isNull() || r.path("createdAt").isMissingNode()).as(q + " createdAt").isFalse();
+                assertThat(r.path("updatedAt").isNull() || r.path("updatedAt").isMissingNode()).as(q + " updatedAt").isFalse();
+            }
+    }
+
+    @Test void h2ConsoleOpenOnlyInH2Profile() throws Exception {
+        // 测试跑在 H2 profile：h2-console 路径放行（MockMvc 里没有 H2 的 servlet，所以是 404 而不是 401）；MySQL 下返回 401 由 CI 冒烟验证
+        assertThat(code(null, "GET", "/h2-console/", null)).isNotEqualTo(401);
+    }
+
     @Test void actuatorHealthIsPublicAndNotFoundIsJson404() throws Exception {
         var h = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/actuator/health")).andReturn().getResponse();
         assertThat(h.getStatus()).isEqualTo(200);

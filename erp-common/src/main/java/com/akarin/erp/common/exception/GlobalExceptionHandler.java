@@ -30,7 +30,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<R<Void>> valid(MethodArgumentNotValidException e) {
         var fe = e.getBindingResult().getFieldError();
-        return of(ErrorCode.BAD_REQUEST, fe == null ? ErrorCode.BAD_REQUEST.getDefaultMsg() : fe.getField() + " " + fe.getDefaultMessage());
+        if (fe == null) return of(ErrorCode.BAD_REQUEST, ErrorCode.BAD_REQUEST.getDefaultMsg());
+        String m = fe.getDefaultMessage() == null ? "" : fe.getDefaultMessage();
+        // 自定义的中文提示已经带了字段名，原样返回；框架默认提示前面加字段名
+        return of(ErrorCode.BAD_REQUEST, m.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) ? m : fe.getField() + " " + m);
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,

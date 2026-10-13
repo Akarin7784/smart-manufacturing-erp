@@ -55,7 +55,7 @@ public class SysAdminController {
     @GetMapping("/roles/{id}") @PreAuthorize(READ)
     public R<RoleAdminService.RoleView> role(@PathVariable Long id) { return R.ok(roles.get(id)); }
     @PostMapping("/roles") @PreAuthorize(WRITE)
-    public R<RoleAdminService.RoleView> createRole(@Valid @RequestBody CodeNameReq req) { return R.ok(roles.create(req)); }
+    public R<RoleAdminService.RoleView> createRole(@org.springframework.validation.annotation.Validated(com.akarin.erp.common.validation.OnCreate.class) @RequestBody CodeNameReq req) { return R.ok(roles.create(req)); }
     @PutMapping("/roles/{id}") @PreAuthorize(WRITE)
     public R<RoleAdminService.RoleView> updateRole(@PathVariable Long id, @Valid @RequestBody CodeNameReq req) { return R.ok(roles.update(id, req)); }
     @PutMapping("/roles/{id}/permissions") @PreAuthorize(WRITE)
@@ -69,7 +69,7 @@ public class SysAdminController {
     @GetMapping("/permissions") @PreAuthorize(READ)
     public R<List<SysPermission>> permissions() { return R.ok(permissions.list()); }
     @PostMapping("/permissions") @PreAuthorize(WRITE)
-    public R<SysPermission> createPermission(@Valid @RequestBody CodeNameReq req) { return R.ok(permissions.create(req)); }
+    public R<SysPermission> createPermission(@org.springframework.validation.annotation.Validated(com.akarin.erp.common.validation.OnCreate.class) @RequestBody CodeNameReq req) { return R.ok(permissions.create(req)); }
     @PutMapping("/permissions/{id}") @PreAuthorize(WRITE)
     public R<SysPermission> updatePermission(@PathVariable Long id, @Valid @RequestBody CodeNameReq req) { return R.ok(permissions.update(id, req)); }
     @DeleteMapping("/permissions/{id}") @PreAuthorize(WRITE)

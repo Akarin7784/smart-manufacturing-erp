@@ -39,9 +39,7 @@ public class ArapBill extends BaseEntity {
 
     /** 核销：校验金额、推进状态机 */
     public void settle(BigDecimal amt) {
-        // 先按 2 位小数四舍五入再校验，避免 0.001 之类被舍成 0.00 后通过
-        BigDecimal a = amt == null ? null : Money.of(amt);
-        if (a == null || a.signum() <= 0) throw new BizException("核销金额必须 ≥ 0.01");
+        BigDecimal a = Money.requireAmount(amt, "核销金额");
         if (SETTLED.equals(status)) throw new BizException("单据已核销完毕: " + billNo);
         if (a.compareTo(remaining()) > 0)
             throw new BizException("超额核销：余额 " + remaining() + "，本次 " + a);

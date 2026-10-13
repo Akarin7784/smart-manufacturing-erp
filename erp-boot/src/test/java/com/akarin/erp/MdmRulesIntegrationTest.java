@@ -94,6 +94,41 @@ class MdmRulesIntegrationTest extends SysTestSupport {
         }
     }
 
+    @Test void updateCodeOptional_sameOk_differentRejected() throws Exception {
+        for (String path : new String[]{"materials", "customers", "suppliers", "warehouses"}) {
+            String code = uniq("U");
+            long id = ok(admin, "POST", "/api/mdm/" + path, "{\"code\":\"" + code + "\",\"name\":\"a\"}").path("id").asLong();
+            // 不传 code = 不改
+            JsonNode r = ok(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"name\":\"b\"}");
+            assertThat(r.path("code").asText()).as(path).isEqualTo(code);
+            assertThat(r.path("name").asText()).isEqualTo("b");
+            // 传相同 = 通过
+            assertThat(code(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"" + code + "\",\"name\":\"c\"}")).as(path).isZero();
+            // 传不同 = 400
+            JsonNode bad = call(admin, "PUT", "/api/mdm/" + path + "/" + id, "{\"code\":\"OTHER\",\"name\":\"d\"}");
+            assertThat(bad.path("code").asInt()).as(path).isEqualTo(400);
+            assertThat(bad.path("msg").asText()).contains("编码不可修改");
+            // 创建时 code 仍必填
+            assertThat(code(admin, "POST", "/api/mdm/" + path, "{\"name\":\"x\"}")).as(path).isEqualTo(400);
+        }
+    }
+
+    @Test void readOnlyUserGets403BeforeValidation() throws Exception {
+        String ro = user(role("RO", "sys:read")).token(this);
+        long mat = mdm(admin, "materials", "M");
+        // 缺必填字段的写请求：只读用户先拿到 403，而不是 400
+        assertThat(code(ro, "PUT", "/api/mdm/materials/" + mat, "{}")).isEqualTo(403);
+        assertThat(code(ro, "POST", "/api/mdm/materials", "{}")).isEqualTo(403);
+        assertThat(code(ro, "POST", "/api/finance/settlements", "{}")).isEqualTo(403);
+        assertThat(code(ro, "POST", "/api/purchase/orders", "{}")).isEqualTo(403);
+        assertThat(code(ro, "PUT", "/api/sys/roles/1", "{}")).isEqualTo(403);
+        assertThat(code(ro, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{}")).isEqualTo(403);
+        // 有权限时同样的请求才进入校验
+        assertThat(code(admin, "PUT", "/api/mdm/materials/" + mat, "{}")).isEqualTo(400);
+        // 只读接口不受影响
+        assertThat(code(ro, "GET", "/api/sys/users", null)).isZero();
+    }
+
     @Test void recreateSoftDeletedCodeReturns40001() throws Exception {
         long id = ok(admin, "GET", "/api/mdm/materials?keyword=DM-M001", null).path("records").get(0).path("id").asLong();
         try {

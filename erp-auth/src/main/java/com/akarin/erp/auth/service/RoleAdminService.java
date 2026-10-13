@@ -54,7 +54,7 @@ public class RoleAdminService {
     @Transactional
     public RoleView update(Long id, CodeNameReq req) {
         SysRole r = require(id);
-        if (!r.getCode().equals(req.code())) throw new BizException("角色编码不可修改");
+        if (req.code() != null && !r.getCode().equals(req.code())) throw new BizException("角色编码不可修改");   // 不传 = 不改
         r.setName(req.name());
         roleMapper.updateById(r);
         return view(r);
@@ -74,6 +74,7 @@ public class RoleAdminService {
     @Transactional
     public RoleView assignPermissions(Long id, List<Long> permissionIds) {
         SysRole r = require(id);
+        if (UserAdminService.ADMIN_ROLE.equals(r.getCode())) throw new BizException("ADMIN 角色权限不可修改");
         var ids = new LinkedHashSet<>(permissionIds);
         List<SysPermission> perms = ids.isEmpty() ? List.of() : permissionMapper.selectBatchIds(ids);
         if (perms.size() != ids.size()) throw new BizException(ErrorCode.NOT_FOUND, "权限点不存在");
