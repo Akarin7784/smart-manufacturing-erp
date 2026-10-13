@@ -50,10 +50,10 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
 
     @Test void amountValidationMessagesAreChinese() throws Exception {
         String[][] cases = {
-                {"/api/finance/settlements", "{\"requestNo\":\"a1\",\"paymentId\":1,\"billId\":1,\"amount\":1.234}", "核销金额最多 2 位小数、16 位整数"},
+                {"/api/finance/settlements", "{\"requestNo\":\"a1\",\"paymentId\":1,\"billId\":1,\"amount\":1.234}", "核销金额最多 2 位小数"},
                 {"/api/finance/settlements", "{\"requestNo\":\"a2\",\"paymentId\":1,\"billId\":1,\"amount\":0.001}", "核销金额"},
                 {"/api/finance/settlements", "{\"requestNo\":\"a3\",\"paymentId\":1,\"billId\":1}", "核销金额不能为空"},
-                {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":10.005}", "收付款金额最多 2 位小数、16 位整数"},
+                {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":10.005}", "收付款金额最多 2 位小数"},
                 {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":1,\"amount\":0}", "收付款金额必须 ≥ 0.01"},
                 {"/api/purchase/orders", "{\"supplierId\":1,\"warehouseId\":1,\"items\":[{\"materialId\":1,\"qty\":1,\"price\":-1}]}", "单价不能为负数"},
                 {"/api/sales/orders", "{\"customerId\":1,\"warehouseId\":1,\"items\":[{\"materialId\":1,\"qty\":0,\"price\":1}]}", "数量必须大于 0"}};
@@ -62,6 +62,37 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
             assertThat(r.path("code").asInt()).as(c[1]).isEqualTo(400);
             assertThat(r.path("msg").asText()).as(c[1]).startsWith(c[2]).doesNotContainPattern("[a-zA-Z]{4,}");
         }
+    }
+
+    @Test void scaleIgnoresTrailingZerosOnEveryAmountEndpoint() throws Exception {
+        long sup = mdm(admin, "suppliers", "S"), wh = mdm(admin, "warehouses", "W"), mat = mdm(admin, "materials", "M"), cus = mdm(admin, "customers", "C");
+        String big = "12345678901234567";   // 17 位整数
+        // 收付款：1.230 / 1.2300 / 1.00 通过，1.231 与 17 位整数 400
+        for (String ok : new String[]{"1.230", "1.2300", "1.00"})
+            assertThat(code(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":" + ok + "}")).as(ok).isZero();
+        assertThat(call(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":1.231}").path("msg").asText()).isEqualTo("收付款金额最多 2 位小数");
+        JsonNode bigPay = call(admin, "POST", "/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + sup + ",\"amount\":" + big + "}");
+        assertThat(bigPay.path("code").asInt()).isEqualTo(400);
+        assertThat(bigPay.path("msg").asText()).isEqualTo("收付款金额整数部分最多 16 位");
+        // 核销：位数通过后才会进到"单据不存在"（400 但提示不同）
+        assertThat(call(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"" + uniq("s") + "\",\"paymentId\":999999,\"billId\":999999,\"amount\":1.230}").path("msg").asText()).isEqualTo("应收应付单不存在: 999999");
+        assertThat(call(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"" + uniq("s") + "\",\"paymentId\":1,\"billId\":1,\"amount\":1.231}").path("msg").asText()).isEqualTo("核销金额最多 2 位小数");
+        assertThat(call(admin, "POST", "/api/finance/settlements", "{\"requestNo\":\"" + uniq("s") + "\",\"paymentId\":1,\"billId\":1,\"amount\":" + big + "}").path("msg").asText()).isEqualTo("核销金额整数部分最多 16 位");
+        // 采购 / 销售订单的数量、单价（最多 4 位小数）
+        String po = "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh + ",\"items\":[{\"materialId\":" + mat + ",\"qty\":%s,\"price\":%s}]}";
+        assertThat(code(admin, "POST", "/api/purchase/orders", String.format(po, "1.00000", "1.230000"))).isZero();
+        assertThat(call(admin, "POST", "/api/purchase/orders", String.format(po, "1", "1.23451")).path("msg").asText()).isEqualTo("单价最多 4 位小数");
+        assertThat(call(admin, "POST", "/api/purchase/orders", String.format(po, "123456789012345", "1")).path("msg").asText()).isEqualTo("数量整数部分最多 14 位");
+        String so = "{\"customerId\":" + cus + ",\"warehouseId\":" + wh + ",\"items\":[{\"materialId\":" + mat + ",\"qty\":%s,\"price\":%s}]}";
+        assertThat(code(admin, "POST", "/api/sales/orders", String.format(so, "2.50", "3.1000"))).isZero();
+        assertThat(call(admin, "POST", "/api/sales/orders", String.format(so, "1.00001", "1")).path("msg").asText()).isEqualTo("数量最多 4 位小数");
+        // 出入库数量
+        assertThat(code(admin, "POST", "/api/inventory/in", "{\"materialId\":" + mat + ",\"warehouseId\":" + wh + ",\"qty\":1.50000}")).isZero();
+        assertThat(call(admin, "POST", "/api/inventory/in", "{\"materialId\":" + mat + ",\"warehouseId\":" + wh + ",\"qty\":1.00001}").path("msg").asText()).isEqualTo("数量最多 4 位小数");
+        // 流程金额条件
+        String def = "{\"name\":\"x\",\"enabled\":false,\"nodes\":[{\"name\":\"n\",\"roleCode\":\"ADMIN\",\"approveMode\":\"ANY\",\"minAmount\":%s}]}";
+        assertThat(call(admin, "PUT", "/api/workflow/definitions/SALES_ORDER", String.format(def, "1.231")).path("msg").asText()).isEqualTo("金额条件最多 2 位小数");
+        assertThat(call(admin, "PUT", "/api/workflow/definitions/SALES_ORDER", String.format(def, big)).path("msg").asText()).isEqualTo("金额条件整数部分最多 16 位");
     }
 
     @Test void validationMessageFieldPrefixIsExplicit() throws Exception {

@@ -38,8 +38,9 @@ public class GlobalExceptionHandler {
 
     static boolean isFullMessage(org.springframework.validation.FieldError fe) {
         if (!fe.contains(jakarta.validation.ConstraintViolation.class)) return false;
-        return fe.unwrap(jakarta.validation.ConstraintViolation.class).getConstraintDescriptor().getPayload()
-                .contains(com.akarin.erp.common.validation.FullMessage.class);
+        var d = fe.unwrap(jakarta.validation.ConstraintViolation.class).getConstraintDescriptor();
+        return d.getPayload().contains(com.akarin.erp.common.validation.FullMessage.class)
+                || d.getAnnotation() instanceof com.akarin.erp.common.validation.MoneyScale;
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,

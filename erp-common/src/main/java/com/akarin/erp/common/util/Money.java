@@ -21,9 +21,24 @@ public final class Money {
      */
     public static BigDecimal requireAmount(BigDecimal v, String label) {
         if (v == null) throw new BizException(label + "不能为空");
-        if (v.stripTrailingZeros().scale() > SCALE) throw new BizException(label + "最多 2 位小数");
+        String err = scaleError(v, 16, SCALE, label);
+        if (err != null) throw new BizException(err);
         if (v.compareTo(new BigDecimal("0.01")) < 0) throw new BizException(label + "必须 ≥ 0.01");
         return v.setScale(SCALE, RoundingMode.UNNECESSARY);
+    }
+
+    /**
+     * 位数检查（@MoneyScale 与 requireAmount 共用，规则唯一）：先 stripTrailingZeros，再要求整数位 ≤ integer、小数位 ≤ fraction。
+     * 1.230 / 1.2300 / 1.00 都视为不超过 2 位小数。通过返回 null，否则返回带字段名的中文提示；null 值视为通过。
+     */
+    public static String scaleError(BigDecimal v, int integer, int fraction, String label) {
+        if (v == null) return null;
+        BigDecimal s = v.stripTrailingZeros();
+        int frac = Math.max(s.scale(), 0);
+        int intDigits = s.precision() - s.scale();
+        if (intDigits > integer) return label + "整数部分最多 " + integer + " 位";
+        if (frac > fraction) return label + "最多 " + fraction + " 位小数";
+        return null;
     }
 
     /** 行金额 = 数量 × 单价 */
