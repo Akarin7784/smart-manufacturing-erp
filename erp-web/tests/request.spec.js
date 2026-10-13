@@ -53,7 +53,8 @@ describe('request 拦截器', () => {
     await expect(onFulfilled(res({ code: 403, msg: '无权限' }))).rejects.toMatchObject({ code: 403 })
     expect(ElMessage.error).toHaveBeenNthCalledWith(1, MSG.forbidden)
     expect(ElMessage.error).toHaveBeenNthCalledWith(2, MSG.forbidden)
-    expect(handleStatus(403, {}, '账号已停用')).toBe('账号已停用')
+    expect(handleStatus(403, {}, '账号已停用')).toBe(MSG.forbidden)
+    expect(handleStatus(403, { url: '/api/auth/login' }, '账号已停用')).toBe('账号已停用')
   })
   it('409 提示数据已被修改', async () => {
     await expect(onRejected(err(409, { code: 409, msg: 'x' }))).rejects.toMatchObject({ code: 409 })
