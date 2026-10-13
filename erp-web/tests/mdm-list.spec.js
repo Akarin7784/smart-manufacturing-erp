@@ -4,7 +4,7 @@ import MdmListView from '@/views/mdm/MdmListView.vue'
 import { pageMdm } from '@/api/mdm'
 import { MDM_RESOURCES } from '@/config/mdm'
 
-vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn() }))
+vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), deleteMdm: vi.fn() }))
 
 const page = (records, total) => ({ records, total, size: 20, current: 1, pages: 1 })
 

@@ -7,7 +7,7 @@ import { createAppRouter } from '@/router'
 import { useAuthStore } from '@/stores/auth'
 import request from '@/utils/request'
 import { login, me } from '@/api/auth'
-import { pageMdm, getMdm } from '@/api/mdm'
+import { pageMdm, getMdm, createMdm, updateMdm, deleteMdm } from '@/api/mdm'
 
 describe('MainLayout + 占位页', () => {
   it('显示用户名、菜单，退出登录回到登录页', async () => {
@@ -35,6 +35,14 @@ describe('api 封装', () => {
     await me()
     await pageMdm('materials', { page: 1, size: 20 })
     await getMdm('customers', 5)
+    const spyPut = vi.spyOn(request, 'put').mockResolvedValue({})
+    const spyDel = vi.spyOn(request, 'delete').mockResolvedValue({})
+    await createMdm('suppliers', { code: 'S1' })
+    await updateMdm('warehouses', 3, { name: 'w' })
+    await deleteMdm('materials', 9)
+    expect(spyPost).toHaveBeenCalledWith('/api/mdm/suppliers', { code: 'S1' })
+    expect(spyPut).toHaveBeenCalledWith('/api/mdm/warehouses/3', { name: 'w' })
+    expect(spyDel).toHaveBeenCalledWith('/api/mdm/materials/9')
     expect(spyPost).toHaveBeenCalledWith('/api/auth/login', { username: 'a', password: 'b' })
     expect(spyGet).toHaveBeenCalledWith('/api/auth/me')
     expect(spyGet).toHaveBeenCalledWith('/api/mdm/materials', { params: { page: 1, size: 20 } })
