@@ -32,17 +32,18 @@
       @current-change="onPageChange"
       @size-change="onSizeChange"
     />
-    <MdmFormDialog v-model="formVisible" :resource="resource" :row="editingRow" @saved="load" />
+    <MdmFormDialog v-model="formVisible" :resource="resource" :row="editingRow" @saved="refresh" @stale="refresh" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteMdm, pageMdm } from '@/api/mdm'
 import { useAuthStore } from '@/stores/auth'
 import MdmFormDialog from './MdmFormDialog.vue'
 import { MDM_RESOURCES } from '@/config/mdm'
+import { ErrorCode } from '@/api/errorCodes'
 import { formatDateTime } from '@/utils/format'
 
 const props = defineProps({ resource: { type: String, required: true } })
@@ -77,9 +78,10 @@ async function onDelete(row) {
     ElMessage.success('删除成功')
     // 当前页删空时回退一页
     if (records.value.length === 1 && page.value > 1) page.value -= 1
-    await load()
-  } catch {
-    // 已提示；e.code 为业务子码，e.status 为 HTTP 类别
+    await refresh()
+  } catch (e) {
+    // 已由拦截器提示；40900 并发冲突时自动刷新列表
+    if (e?.code === ErrorCode.CONCURRENT_MODIFIED) await refresh()
   }
 }
 
@@ -87,35 +89,48 @@ async function onDelete(row) {
 const statusText = (s) => (s === 1 ? '启用' : s === 0 ? '停用' : '-')
 const statusTag = (s) => (s === 1 ? 'success' : 'info')
 
-let inflight = null // { key, promise }：相同参数的并发请求只发一次
+/**
+ * 当前请求：{ key, promise, controller }。
+ * - 相同参数的并发调用复用同一请求（去重）；force=true 时强制重新请求（保存/删除后刷新）
+ * - 新请求会 abort 被取代的旧请求
+ * - 结果是否生效按「对象身份」判断，而不是 key：A→B→A 快速切换时，第一个 A 的返回不会覆盖或提前清掉第二个 A
+ */
+let current = null
 
-function load() {
+function load({ force = false } = {}) {
   const params = { page: page.value, size: size.value }
   if (keyword.value.trim()) params.keyword = keyword.value.trim()
-  const key = `${props.resource}?${JSON.stringify(params)}`
-  if (inflight?.key === key) return inflight.promise
   const resource = props.resource
-  const promise = (async () => {
+  const key = `${resource}?${JSON.stringify(params)}`
+  if (!force && current?.key === key) return current.promise
+  current?.controller.abort()
+  const entry = { key, controller: new AbortController() }
+  entry.promise = (async () => {
     loading.value = true
     try {
-      const data = await pageMdm(resource, params)
-      if (inflight?.key !== key) return // 已被更新的请求取代，丢弃旧结果
+      const data = await pageMdm(resource, params, { signal: entry.controller.signal })
+      if (current !== entry) return // 已被取代，丢弃
       records.value = data?.records || []
       total.value = Number(data?.total || 0)
     } catch {
-      if (inflight?.key !== key) return
+      if (current !== entry) return
       records.value = []
       total.value = 0
     } finally {
-      if (inflight?.key === key) {
-        inflight = null
+      if (current === entry) {
+        current = null
         loading.value = false
       }
     }
   })()
-  inflight = { key, promise }
-  return promise
+  current = entry
+  return entry.promise
 }
+
+/** 保存/删除/并发冲突后的刷新：绕过去重 */
+const refresh = () => load({ force: true })
+
+onBeforeUnmount(() => current?.controller.abort())
 
 function onSearch() { page.value = 1; load() }
 function onReset() { keyword.value = ''; page.value = 1; load() }
@@ -126,7 +141,7 @@ function onSizeChange(s) { size.value = s; page.value = 1; load() }
 onMounted(load)
 watch(() => props.resource, () => { keyword.value = ''; page.value = 1; load() })
 
-defineExpose({ openForm, onDelete, canWrite, formVisible, editingRow, load, onSearch, onReset, onPageChange, onSizeChange, records, total, page, size, keyword })
+defineExpose({ refresh, openForm, onDelete, canWrite, formVisible, editingRow, load, onSearch, onReset, onPageChange, onSizeChange, records, total, page, size, keyword })
 </script>
 
 <style scoped>

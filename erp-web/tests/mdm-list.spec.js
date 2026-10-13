@@ -4,6 +4,7 @@ import MdmListView from '@/views/mdm/MdmListView.vue'
 import { pageMdm } from '@/api/mdm'
 import { MDM_RESOURCES } from '@/config/mdm'
 
+const SIG = { signal: expect.any(AbortSignal) }
 vi.mock('@/api/mdm', () => ({ pageMdm: vi.fn(), getMdm: vi.fn(), deleteMdm: vi.fn() }))
 
 const page = (records, total) => ({ records, total, size: 20, current: 1, pages: 1 })
@@ -15,7 +16,7 @@ describe('MdmListView', () => {
     pageMdm.mockResolvedValue(page([{ id: 1, code: 'M001', name: '螺丝', spec: 'M6', unit: '个', category: '五金', status: 1 }, { id: 2, code: 'M002', name: '停用料', status: 0, createdAt: '2026-10-14T03:24:49.088012' }, { id: 3, code: 'M003', name: '未知', status: null }], 3))
     const w = mount(MdmListView, { props: { resource: 'materials' } })
     await flushPromises()
-    expect(pageMdm).toHaveBeenCalledWith('materials', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenCalledWith('materials', { page: 1, size: 20 }, SIG)
     expect(w.text()).toContain('物料编码')
     expect(w.text()).toContain('M001')
     expect(w.text()).toContain('启用')
@@ -32,20 +33,20 @@ describe('MdmListView', () => {
     const w = mount(MdmListView, { props: { resource: 'customers' } })
     await flushPromises()
     w.vm.onPageChange(3); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 3, size: 20 })
+    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 3, size: 20 }, SIG)
     expect(w.findComponent({ name: 'ElTableColumn' }).props('index')(0)).toBe(41)
     await w.find('input[data-test=keyword]').setValue('  华东 ')
     await w.find('[data-test=search]').trigger('click'); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20, keyword: '华东' })
+    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20, keyword: '华东' }, SIG)
     await w.find('[data-test=reset]').trigger('click'); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenLastCalledWith('customers', { page: 1, size: 20 }, SIG)
   })
   it('切换每页条数', async () => {
     pageMdm.mockResolvedValue(page([], 0))
     const w = mount(MdmListView, { props: { resource: 'suppliers' } })
     await flushPromises()
     w.vm.onPageChange(2); w.vm.onSizeChange(50); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('suppliers', { page: 1, size: 50 })
+    expect(pageMdm).toHaveBeenLastCalledWith('suppliers', { page: 1, size: 50 }, SIG)
   })
   it('接口失败（后端返回 code≠0）清空表格', async () => {
     const actual = await vi.importActual('@/api/mdm')
@@ -67,7 +68,7 @@ describe('MdmListView', () => {
     const w = mount(MdmListView, { props: { resource: 'materials' } })
     await flushPromises()
     await w.setProps({ resource: 'warehouses' }); await flushPromises()
-    expect(pageMdm).toHaveBeenLastCalledWith('warehouses', { page: 1, size: 20 })
+    expect(pageMdm).toHaveBeenLastCalledWith('warehouses', { page: 1, size: 20 }, SIG)
     expect(w.text()).toContain('仓库编码')
   })
   it('四类主数据配置与后端实体字段一致', () => {

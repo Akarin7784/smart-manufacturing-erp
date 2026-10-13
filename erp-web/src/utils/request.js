@@ -76,6 +76,8 @@ function fail(status, code, config, msg) {
  * 成功/失败以 HTTP 状态码为准（非 2xx 走 onRejected）；业务子码取 body.code。
  * 兼容旧后端：HTTP 200 但 body.code≠0 时视为失败，类别由 code 推导（40001 -> 400）。
  */
+export const CANCELED = 'ERR_CANCELED'
+
 export function onFulfilled(response) {
   const body = response.data
   if (body && typeof body === 'object' && 'code' in body) {
@@ -86,6 +88,12 @@ export function onFulfilled(response) {
 }
 
 export function onRejected(error) {
+  // 被 AbortController 取消的请求：静默拒绝，不提示、不当作网络错误
+  if (axios.isCancel(error)) {
+    const e = new BizError(CANCELED, '请求已取消', 0)
+    e.canceled = true
+    return Promise.reject(e)
+  }
   const status = error.response?.status
   if (!status) return fail(0, 0, error.config, MSG.network)
   const body = error.response.data

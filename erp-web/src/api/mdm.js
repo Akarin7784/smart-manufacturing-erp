@@ -1,7 +1,7 @@
 import request from '@/utils/request'
 
 /** 主数据分页：GET /api/mdm/{resource}?page&size&keyword -> MyBatis-Plus Page {records,total,size,current,pages} */
-export const pageMdm = (resource, params) => request.get(`/api/mdm/${resource}`, { params })
+export const pageMdm = (resource, params, config = {}) => request.get(`/api/mdm/${resource}`, { ...config, params })
 export const getMdm = (resource, id) => request.get(`/api/mdm/${resource}/${id}`)
 export const createMdm = (resource, data, config) => request.post(`/api/mdm/${resource}`, data, config)
 export const updateMdm = (resource, id, data) => request.put(`/api/mdm/${resource}/${id}`, data)

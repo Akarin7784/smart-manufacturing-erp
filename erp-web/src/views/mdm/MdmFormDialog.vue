@@ -24,13 +24,14 @@ import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createMdm, updateMdm } from '@/api/mdm'
 import { MDM_FORMS, MDM_RESOURCES } from '@/config/mdm'
+import { ErrorCode } from '@/api/errorCodes'
 
 const props = defineProps({
   modelValue: Boolean,
   resource: { type: String, required: true },
   row: { type: Object, default: null }
 })
-const emit = defineEmits(['update:modelValue', 'saved'])
+const emit = defineEmits(['update:modelValue', 'saved', 'stale'])
 
 const formRef = ref()
 const saving = ref(false)
@@ -81,8 +82,13 @@ async function onSave() {
     ElMessage.success('保存成功')
     emit('update:modelValue', false)
     emit('saved')
-  } catch {
-    // 拦截器已按业务码提示（40001 编码已存在含已删除、40900 并发冲突等），保留弹窗便于修改重试，保留弹窗便于修改重试
+  } catch (e) {
+    // 拦截器已按业务码提示（40001 编码已存在含已删除等），保留弹窗便于修改重试；
+    // 40900 并发冲突：表单数据已过期，关闭弹窗并通知列表刷新
+    if (e?.code === ErrorCode.CONCURRENT_MODIFIED) {
+      emit('update:modelValue', false)
+      emit('stale')
+    }
   } finally {
     saving.value = false
   }
