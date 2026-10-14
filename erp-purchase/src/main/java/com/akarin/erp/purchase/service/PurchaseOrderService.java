@@ -144,10 +144,11 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
                 .set(PurchaseOrder::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1")));
         d.order().setStatus("RECEIVED");
-        for (var it : d.items()) {
-            inventoryService.stockIn(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
-                    "PURCHASE_RECEIPT", d.order().getOrderNo(), null);
-        }
+        // 合并同物料行、按 (materialId, warehouseId) 固定顺序加锁，避免正反序单据并发死锁；流水按合并后的物料各一条
+        inventoryService.stockInAll(d.items().stream()
+                .map(it -> new com.akarin.erp.inventory.service.InventoryService.StockLine(
+                        it.getMaterialId(), d.order().getWarehouseId(), it.getQty()))
+                .toList(), "PURCHASE_RECEIPT", d.order().getOrderNo());
         BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
         publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.PURCHASE_RECEIPT,
                 d.order().getOrderNo(), d.order().getSupplierId(), amount));

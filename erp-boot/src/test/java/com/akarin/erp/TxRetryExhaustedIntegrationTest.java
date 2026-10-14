@@ -1,0 +1,118 @@
+package com.akarin.erp;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.akarin.erp.common.tx.TxRetry;
+import com.akarin.erp.inventory.mapper.StockMapper;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.TransactionSystemException;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.math.BigDecimal;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+
+/**
+ * #18(d)(e2)(f)：钩子让库存加锁读连续抛死锁 / 回滚失败，验证 TxRetry 重试 3 次后返回 HTTP 409 + 40900（不是 500），
+ * 事务整体回滚（订单仍 APPROVED、库存不变），每次重试都有 WARN 日志。
+ */
+@SpringBootTest
+@AutoConfigureMockMvc
+class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
+    static final AtomicInteger failuresLeft = new AtomicInteger();
+    static volatile Supplier<RuntimeException> failure;
+
+    @TestConfiguration
+    static class Hook {
+        @Bean BeanPostProcessor forcedLockFailure() {
+            return new BeanPostProcessor() {
+                @Override public Object postProcessAfterInitialization(Object bean, String name) {
+                    if (!(bean instanceof StockMapper)) return bean;
+                    return Proxy.newProxyInstance(StockMapper.class.getClassLoader(), new Class<?>[]{StockMapper.class}, (px, m, args) -> {
+                        if (m.getName().equals("selectOne") && failure != null && failuresLeft.getAndDecrement() > 0) throw failure.get();
+                        try { return m.invoke(bean, args); } catch (InvocationTargetException ex) { throw ex.getCause(); }
+                    });
+                }
+            };
+        }
+    }
+
+    @Autowired JdbcTemplate jdbc;
+    @Autowired MockMvc mvc;
+    ListAppender<ILoggingEvent> log;
+    String admin;
+    long wh, mat, sup;
+
+    @BeforeEach void setUp() throws Exception {
+        log = new ListAppender<>(); log.start();
+        ((Logger) LoggerFactory.getLogger(TxRetry.class)).addAppender(log);
+        admin = login("admin", "admin123");
+        wh = mdm(admin, "warehouses", "XW"); mat = mdm(admin, "materials", "XM"); sup = mdm(admin, "suppliers", "XS");
+        ok(admin, "POST", "/api/inventory/in", "{\"materialId\":" + mat + ",\"warehouseId\":" + wh + ",\"qty\":\"10\"}");
+    }
+
+    @AfterEach void tearDown() {
+        failure = null; failuresLeft.set(0);
+        ((Logger) LoggerFactory.getLogger(TxRetry.class)).detachAppender(log);
+    }
+
+    long approvedOrder() throws Exception {
+        long id = ok(admin, "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":\"1\",\"price\":\"1\"}]}").path("order").path("id").asLong();
+        jdbc.update("UPDATE pur_order SET status='APPROVED' WHERE id=?", id);
+        return id;
+    }
+
+    void assertExhaustedIs409(Supplier<RuntimeException> f) throws Exception {
+        long id = approvedOrder();
+        failure = f; failuresLeft.set(3);
+        var res = mvc.perform(post("/api/purchase/orders/" + id + "/receive").header("Authorization", "Bearer " + admin)).andReturn().getResponse();
+        assertThat(res.getStatus()).as("重试耗尽 → HTTP 409，绝不 500").isEqualTo(409);
+        assertThat(res.getContentAsString()).contains("\"code\":40900");
+        assertThat(failuresLeft.get()).as("恰好尝试了 3 次").isEqualTo(0);
+        assertThat(jdbc.queryForObject("SELECT status FROM pur_order WHERE id=?", String.class, id)).isEqualTo("APPROVED");
+        assertThat(jdbc.queryForObject("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=?", BigDecimal.class, mat, wh)).isEqualByComparingTo("10");
+        assertThat(log.list).hasSize(3).allSatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.WARN);
+            assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(f.get().getClass().getName());
+        });
+        assertThat(log.list.get(0).getFormattedMessage()).contains("attempt=1/3");
+        assertThat(log.list.get(1).getFormattedMessage()).contains("attempt=2/3");
+        assertThat(log.list.get(2).getFormattedMessage()).contains("exhausted").contains("attempts=3");
+    }
+
+    @Test void deadlockThreeTimesIs409_40900() throws Exception {
+        assertExhaustedIs409(() -> new DeadlockLoserDataAccessException("forced deadlock", null));
+    }
+
+    /** H2 上锁超时后回滚失败（CLOSED -> ROLLING_BACK）这一类：同样重试，耗尽后 409 而不是 500 */
+    @Test void rollbackFailureThreeTimesIs409NotServerError() throws Exception {
+        assertExhaustedIs409(() -> new TransactionSystemException("JDBC rollback failed"));
+    }
+
+    @Test void deadlockTwiceThenSucceeds() throws Exception {
+        long id = approvedOrder();
+        failure = () -> new DeadlockLoserDataAccessException("forced deadlock", null); failuresLeft.set(2);
+        assertThat(ok(admin, "POST", "/api/purchase/orders/" + id + "/receive", null).path("order").path("status").asText()).isEqualTo("RECEIVED");
+        assertThat(jdbc.queryForObject("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=?", BigDecimal.class, mat, wh)).isEqualByComparingTo("11");
+        assertThat(log.list).hasSize(2);
+    }
+}

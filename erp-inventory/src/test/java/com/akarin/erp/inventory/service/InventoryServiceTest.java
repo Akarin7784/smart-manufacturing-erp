@@ -85,4 +85,30 @@ class InventoryServiceTest {
         when(stockMapper.selectOne(any())).thenReturn(stock("99999999999999"));
         assertThatThrownBy(() -> svc.stockIn(1L, 1L, new BigDecimal("1"), null, null, null)).hasMessageContaining("超出数量上限");
     }
+
+    @Test void mergeAndSortMergesDuplicateLinesAndOrdersByMaterialThenWarehouse() {
+        var out = InventoryService.mergeAndSort(java.util.List.of(
+                new InventoryService.StockLine(9L, 1L, new BigDecimal("1")),
+                new InventoryService.StockLine(3L, 2L, new BigDecimal("2")),
+                new InventoryService.StockLine(9L, 1L, new BigDecimal("0.5")),
+                new InventoryService.StockLine(3L, 1L, new BigDecimal("4"))));
+        assertThat(out).extracting(InventoryService.StockLine::materialId, InventoryService.StockLine::warehouseId)
+                .containsExactly(tuple(3L, 1L), tuple(3L, 2L), tuple(9L, 1L));
+        assertThat(out.get(2).qty()).isEqualByComparingTo("1.5");
+    }
+
+    @Test void stockInAllLocksInSortedOrderOneTxnPerMergedLine() {
+        when(stockMapper.selectOne(any())).thenReturn(stock("0"));
+        when(stockMapper.updateById(any(Stock.class))).thenReturn(1);
+        var txns = svc.stockInAll(java.util.List.of(
+                new InventoryService.StockLine(5L, 1L, new BigDecimal("1")),
+                new InventoryService.StockLine(2L, 1L, new BigDecimal("2")),
+                new InventoryService.StockLine(5L, 1L, new BigDecimal("3"))), "PURCHASE_RECEIPT", "PO1");
+        assertThat(txns).extracting(StockTxn::getMaterialId).containsExactly(2L, 5L);
+        assertThat(txns.get(1).getQty()).isEqualByComparingTo("4");
+        var order = inOrder(stockMapper);
+        order.verify(stockMapper).ensureRow(2L, 1L);
+        order.verify(stockMapper).ensureRow(5L, 1L);
+        assertThat(svc.stockOutAll(java.util.List.of(new InventoryService.StockLine(2L, 1L, new BigDecimal("1"))), "S", "SO1")).hasSize(1);
+    }
 }

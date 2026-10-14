@@ -15,6 +15,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 @Service
 @RequiredArgsConstructor
@@ -32,6 +37,44 @@ public class InventoryService {
     @Transactional
     public StockTxn stockOut(Long materialId, Long warehouseId, BigDecimal qty, String bizType, String bizNo, String remark) {
         return change("OUT", materialId, warehouseId, qty, bizType, bizNo, remark);
+    }
+
+    /** 一条库存变动：物料 + 仓库 + 数量 */
+    public record StockLine(Long materialId, Long warehouseId, BigDecimal qty) {}
+
+    private static final Comparator<StockLine> LOCK_ORDER =
+            Comparator.comparing(StockLine::materialId).thenComparing(StockLine::warehouseId);
+
+    /**
+     * 单据整单入库（采购收货）。同一 (物料, 仓库) 的多行先合并数量，再按 (materialId, warehouseId) 升序逐个加锁处理：
+     * 所有事务以相同顺序获取库存行锁，[A,B] 与 [B,A] 两张单并发时不会互相等待成环（死锁）。
+     * 流水按合并后的 (物料, 仓库) 各记一条（数量为合计），与库存行的一次变动一一对应。
+     */
+    @Transactional
+    public List<StockTxn> stockInAll(List<StockLine> lines, String bizType, String bizNo) {
+        return applyAll("IN", lines, bizType, bizNo);
+    }
+
+    /** 单据整单出库（销售发货），规则同 {@link #stockInAll} */
+    @Transactional
+    public List<StockTxn> stockOutAll(List<StockLine> lines, String bizType, String bizNo) {
+        return applyAll("OUT", lines, bizType, bizNo);
+    }
+
+    /** 合并同 (物料, 仓库) 并排序；仅供本类与测试使用 */
+    static List<StockLine> mergeAndSort(List<StockLine> lines) {
+        Map<StockLine, BigDecimal> sum = new TreeMap<>(LOCK_ORDER);
+        for (StockLine l : lines) sum.merge(new StockLine(l.materialId(), l.warehouseId(), null), l.qty(), BigDecimal::add);
+        List<StockLine> out = new ArrayList<>(sum.size());
+        sum.forEach((k, q) -> out.add(new StockLine(k.materialId(), k.warehouseId(), q)));
+        return out;
+    }
+
+    private List<StockTxn> applyAll(String dir, List<StockLine> lines, String bizType, String bizNo) {
+        List<StockTxn> out = new ArrayList<>();
+        for (StockLine l : mergeAndSort(lines))
+            out.add(change(dir, l.materialId(), l.warehouseId(), l.qty(), bizType, bizNo, null));
+        return out;
     }
 
     private StockTxn change(String dir, Long materialId, Long warehouseId, BigDecimal qty,

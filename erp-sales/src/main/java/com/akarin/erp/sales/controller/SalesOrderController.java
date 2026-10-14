@@ -51,5 +51,5 @@ public class SalesOrderController {
 
     @PostMapping("/{id}/ship")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(txRetry.run(() -> service.ship(id))); }
+    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(txRetry.run("sales.ship#" + id, () -> service.ship(id))); }
 }

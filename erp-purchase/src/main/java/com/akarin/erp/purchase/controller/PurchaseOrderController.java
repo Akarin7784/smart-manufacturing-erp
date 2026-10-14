@@ -51,5 +51,5 @@ public class PurchaseOrderController {
 
     @PostMapping("/{id}/receive")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<PurchaseOrderDetail> receive(@PathVariable Long id) { return R.ok(txRetry.run(() -> service.receive(id))); }
+    public R<PurchaseOrderDetail> receive(@PathVariable Long id) { return R.ok(txRetry.run("purchase.receive#" + id, () -> service.receive(id))); }
 }

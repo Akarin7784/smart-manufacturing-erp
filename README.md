@@ -225,7 +225,7 @@ ALTER TABLE wf_process_def  ADD COLUMN version INT NOT NULL DEFAULT 0;
 | 403 | 403 | 无权限 | 缺少对应权限点，例如没有 `finance:read` 时调用 `GET /api/finance/*`，没有 `finance:write` 时调用 `POST /api/finance/payments`、`/settlements`；登录时账号已停用 |
 | 404 | 404 | 资源不存在 | 路径不存在；路径里的资源查不到，例如 `GET /api/finance/bills/{id}`、`GET /api/mdm/*/{id}`、`PUT /api/purchase/orders/{id}`。**先判路径资源**：路径资源不存在一律 404，优先于请求体里的 version、引用等检查 |
 | 405 | 405 | 请求方法不支持 | 例如 `PUT /api/finance/reconciliation` |
-| 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；死锁或锁等待超时在最外层整事务自动重试 3 次后仍失败；首次收货/入库（库存行尚不存在）并发不再返回 40900（#13）；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
+| 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；死锁或锁等待超时（含 H2 锁超时后回滚失败）在最外层整事务自动重试 3 次后仍失败（每次重试记 WARN 日志），返回 HTTP 409，不会是 500；首次收货/入库（库存行尚不存在）并发不再返回 40900（#13）；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
 | 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`：被订单、库存、应收应付单、收付款引用 |
 | 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |
 | 409 | 40903 | 单据状态已变更，提示"单据状态已变更，请刷新后重试" | `PUT /api/purchase/orders/{id}`、`PUT /api/sales/orders/{id}`：订单已不是草稿（读出时已不是草稿，或并发提交/审批导致定向更新影响 0 行后重读发现不是草稿）。参数校验和引用检查（供应商/客户、仓库、物料是否存在）先于状态判断：非法输入一律 400 |
@@ -287,3 +287,7 @@ mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率�
 7. 用户/角色/菜单管理接口、数据权限（按组织/仓库）、操作日志
 6. Redis：单号号段、权限缓存、登录限流；接口文档（springdoc）、Flyway 迁移
 7. 单元/集成测试（Testcontainers）、CI、Docker 镜像；与 MES 项目对接（生产领料/完工入库）
+
+## 库存加锁顺序与流水
+
+采购收货、销售发货时，同一单据里同一 (物料, 仓库) 的多行会先合并数量，再按 (materialId, warehouseId) 升序逐个加锁更新库存，所有事务以相同顺序取锁，避免正反序单据并发死锁。库存流水按合并后的 (物料, 仓库) 各记一条，数量为该单据的合计，与库存行的一次变动一一对应（同一物料在单据里写了两行，只生成一条流水）。
