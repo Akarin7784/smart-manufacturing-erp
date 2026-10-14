@@ -38,7 +38,7 @@ class IdempotencyExpiredCleanupTest {
 
     int run(IdempotencyService s, String req) {
         try {
-            Long r = s.execute("k", "op", req, () -> { work.incrementAndGet(); return 1L; }, x -> x, id -> -id);
+            Long r = s.execute("k", "op", req, "pur_order", () -> { work.incrementAndGet(); return 1L; }, x -> x, id -> -id);
             return r == -99L ? -99 : 0;   // -99：重放了过期记录
         } catch (BizException e) { return e.getCode(); }
     }

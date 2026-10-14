@@ -38,7 +38,7 @@ public class PurchaseOrderController {
     @PreAuthorize("hasAuthority('purchase:write')")
     public R<PurchaseOrderDetail> create(@Valid @RequestBody PurchaseOrderCreateReq req, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
         // 顺序（#22）：@Valid → 幂等占位 → 业务校验 → 取号（独立取号池）→ 业务事务
-        return R.ok(idem.execute(idemKey, "purchase.order.create", req, () -> {
+        return R.ok(idem.execute(idemKey, "purchase.order.create", req, "pur_order", () -> {
             service.validateCreate(req);
             return com.akarin.erp.common.util.NoGenerator.reserveThen(Map.of("PO", 1), () -> service.create(req));
         }, d -> d.order().getId(), service::detail));

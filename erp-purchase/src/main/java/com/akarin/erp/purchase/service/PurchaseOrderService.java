@@ -77,6 +77,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         List<PurchaseOrderItem> items = buildItems(req.items().stream()
                 .map(l -> new Line(l.materialId(), l.qty(), l.price())).toList());
         o.setTotalAmount(totalOf(items));
+        com.akarin.erp.common.idem.IdemContext.apply((u, k, h) -> { o.setIdemUser(u); o.setIdemKey(k); o.setIdemHash(h); });
         o.setVersion(0);
         save(o);
         insertItems(o.getId(), items);

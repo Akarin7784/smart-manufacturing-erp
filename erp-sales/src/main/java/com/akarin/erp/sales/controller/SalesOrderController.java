@@ -38,7 +38,7 @@ public class SalesOrderController {
     @PreAuthorize("hasAuthority('sales:write')")
     public R<SalesOrderDetail> create(@Valid @RequestBody SalesOrderCreateReq req, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
         // 顺序（#22）：@Valid → 幂等占位 → 业务校验 → 取号（独立取号池）→ 业务事务
-        return R.ok(idem.execute(idemKey, "sales.order.create", req, () -> {
+        return R.ok(idem.execute(idemKey, "sales.order.create", req, "sal_order", () -> {
             service.validateCreate(req);
             return com.akarin.erp.common.util.NoGenerator.reserveThen(Map.of("SO", 1), () -> service.create(req));
         }, d -> d.order().getId(), service::detail));
