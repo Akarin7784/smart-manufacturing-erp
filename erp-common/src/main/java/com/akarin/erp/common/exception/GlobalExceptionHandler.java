@@ -89,8 +89,10 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(org.springframework.jdbc.UncategorizedSQLException.class)
     public ResponseEntity<R<Void>> uncategorizedSql(org.springframework.jdbc.UncategorizedSQLException e) {
         java.sql.SQLException s = e.getSQLException();
-        log.error("uncategorized SQL error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
-                s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        if (!com.akarin.erp.common.tx.TxRetry.alreadyLogged(e))
+            log.error("uncategorized SQL error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                    s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        log.debug("uncategorized SQL error (stack)", e);
         return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
     }
 
@@ -100,8 +102,11 @@ public class GlobalExceptionHandler {
         java.sql.SQLException s = null;
         for (Throwable t = e; t != null && s == null; t = t.getCause() == t ? null : t.getCause())
             if (t instanceof java.sql.SQLException x) s = x;
-        log.error("transaction system error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
-                s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        // #22-6：经 TxRetry 的请求已记过一条简短 ERROR，这里不再重复；#22-4：堆栈只在 DEBUG
+        if (!com.akarin.erp.common.tx.TxRetry.alreadyLogged(e))
+            log.error("transaction system error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                    s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        log.debug("transaction system error (stack)", e);
         return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
     }
 

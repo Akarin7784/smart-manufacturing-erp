@@ -32,6 +32,13 @@ public class InventoryService {
     private final MaterialService materialService;
     private final WarehouseService warehouseService;
 
+    /** 手工出入库的输入校验，不开事务、不取号（#22） */
+    public void validateChange(Long materialId, Long warehouseId, BigDecimal qty) {
+        if (qty == null || qty.signum() <= 0) throw new BizException("数量必须大于 0");
+        materialService.requireRef(materialId);
+        warehouseService.requireRef(warehouseId);
+    }
+
     @Transactional
     public StockTxn stockIn(Long materialId, Long warehouseId, BigDecimal qty, String bizType, String bizNo, String remark) {
         return change("IN", materialId, warehouseId, qty, bizType, bizNo, remark);

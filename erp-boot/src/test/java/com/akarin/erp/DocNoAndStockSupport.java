@@ -20,11 +20,11 @@ abstract class DocNoAndStockSupport extends ApiTestSupport {
     @Autowired JdbcTemplate jdbc;
     @Autowired DataSourceProperties props;
 
-    static String today() { return LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")); }
+    static String today() { return LocalDate.now(NoGenerator.ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd")); }
 
     /** (a) 两个“实例”（各自独立连接池的序列）并发取同一个 key：值不重复且连续 1..N；运行中的应用已安装数据库序列 */
     void docNoTwoInstancesNoDuplicates() throws Exception {
-        JdbcDocNoSequence i1 = new JdbcDocNoSequence(props), i2 = new JdbcDocNoSequence(props);
+        JdbcDocNoSequence i1 = new JdbcDocNoSequence(props, 1000, 2), i2 = new JdbcDocNoSequence(props, 1000, 2);
         // 构造即建独立 Hikari 池；这里不调用 afterPropertiesSet，避免替换应用里已安装的序列
         String key = "TST" + UUID.randomUUID().toString().substring(0, 8);
         int threadsPerInstance = 4, perThread = 250;

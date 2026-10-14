@@ -20,7 +20,7 @@ import static org.mockito.Mockito.*;
 /** 请求号唯一索引冲突走幂等重放：参数相同返回原结果，不同返回 40902 */
 class SettlementControllerTest {
     FinanceService service = mock(FinanceService.class);
-    SettlementController c = new SettlementController(service, mock(PaymentMapper.class), mock(SettlementMapper.class));
+    SettlementController c = new SettlementController(service, mock(com.akarin.erp.common.idem.IdempotencyService.class), mock(PaymentMapper.class), mock(SettlementMapper.class));
     SettleReq req = new SettleReq("R1", 1L, 2L, BigDecimal.ONE);
 
     @Test void duplicateRequestNoSameParamsReturnsOriginal() {

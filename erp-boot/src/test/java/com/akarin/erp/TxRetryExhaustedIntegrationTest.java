@@ -145,8 +145,10 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(UncategorizedSQLException.class.getName())
                 .contains("errorCode=50000").doesNotContain("secret_column");
         assertThat(e.getThrowableProxy()).as("不附带异常（异常消息里有 SQL）").isNull();
-        assertThat(handlerLog.list).isNotEmpty().allSatisfy(ev -> {
-            assertThat(ev.getFormattedMessage()).doesNotContain("secret_column");
+        // #22-6：整个请求只有 TxRetry 一条 ERROR；全局处理器不再重复，INFO 及以上不带堆栈（堆栈只在 DEBUG）
+        assertThat(handlerLog.list).noneMatch(ev -> ev.getLevel() == Level.ERROR);
+        assertThat(handlerLog.list).filteredOn(ev -> ev.getLevel().isGreaterOrEqual(Level.INFO)).allSatisfy(ev -> {
+            assertThat(ev.getFormattedMessage()).doesNotContain("secret_column").doesNotContain("unexpected");
             assertThat(ev.getThrowableProxy()).isNull();
         });
         assertThat(jdbc.queryForObject("SELECT status FROM pur_order WHERE id=?", String.class, id)).isEqualTo("APPROVED");
@@ -200,9 +202,11 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(TransactionSystemException.class.getName())
                 .contains("sqlState=08S01").doesNotContain("secret_column");
         assertThat(e.getThrowableProxy()).isNull();
-        assertThat(handlerLog.list).isNotEmpty().allSatisfy(ev -> {
+        // #22-6：整个请求只有 TxRetry 一条 ERROR；全局处理器不再重复，INFO 及以上不带堆栈（堆栈只在 DEBUG）
+        assertThat(handlerLog.list).noneMatch(ev -> ev.getLevel() == Level.ERROR);
+        assertThat(handlerLog.list).filteredOn(ev -> ev.getLevel().isGreaterOrEqual(Level.INFO)).allSatisfy(ev -> {
             assertThat(ev.getFormattedMessage()).doesNotContain("secret_column").doesNotContain("unexpected");
-            assertThat(ev.getThrowableProxy()).as("不打完整堆栈").isNull();
+            assertThat(ev.getThrowableProxy()).isNull();
         });
     }
 

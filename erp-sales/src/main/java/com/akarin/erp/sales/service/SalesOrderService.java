@@ -44,6 +44,25 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
     private final InventoryService inventoryService;
     private final ApplicationEventPublisher publisher;
 
+    /** 创建前的输入校验，不开事务、不取号（#22：先校验，再取号，再拿业务连接/开事务） */
+    public void validateCreate(SalesOrderCreateReq req) {
+        customerService.requireRef(req.customerId());
+        warehouseService.requireRef(req.warehouseId());
+        totalOf(buildItems(req.items().stream().map(l -> new Line(l.materialId(), l.qty(), l.price())).toList()));
+    }
+
+    /**
+     * ship 需要的单号（事务外预取，#22）：库存流水每个合并后的物料一个，加一个AR单号。
+     * 先判状态，非 APPROVED 直接 400，不浪费号；事务内仍会再判一次。
+     */
+    public java.util.Map<String, Integer> shipNumbers(Long id) {
+        SalesOrderDetail d = detail(id);
+        if (!"APPROVED".equals(d.order().getStatus()))
+            throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
+        int n = (int) d.items().stream().map(SalesOrderItem::getMaterialId).distinct().count();
+        return java.util.Map.of(InventoryService.TXN_PREFIX_OUT, n, "AR", 1);
+    }
+
     @Transactional
     public SalesOrderDetail create(SalesOrderCreateReq req) {
         customerService.requireRef(req.customerId());
