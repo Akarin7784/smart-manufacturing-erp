@@ -22,6 +22,9 @@ class ErrorCodeTest {
         assertThat(d.getBody().getCode()).as("未被业务捕获的唯一键冲突仍兜底 40900").isEqualTo(40900);
         assertThat(ErrorCode.MASTER_DATA_REFERENCED.getCode()).isEqualTo(40901);
         assertThat(ErrorCode.IDEMPOTENCY_KEY_REUSED.getCode()).isEqualTo(40902);
+        assertThat(ErrorCode.ORDER_STATUS_CHANGED.getCode()).isEqualTo(40903);
+        assertThat(ErrorCode.ORDER_STATUS_CHANGED.getHttpStatus()).isEqualTo(409);
+        assertThat(ErrorCode.ORDER_STATUS_CHANGED.getDefaultMsg()).isEqualTo("单据状态已变更，请刷新后重试");
     }
 
     @Test void bizExceptionCarriesErrorCode() {
