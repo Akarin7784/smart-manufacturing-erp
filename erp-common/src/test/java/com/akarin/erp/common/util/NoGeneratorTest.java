@@ -31,7 +31,7 @@ class NoGeneratorTest {
         Map<String, AtomicLong> db = new ConcurrentHashMap<>();
         NoGenerator.Sequence s = k -> db.computeIfAbsent(k, x -> new AtomicLong()).incrementAndGet();
         NoGenerator.install(s);
-        String day = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String day = LocalDate.now(NoGenerator.ZONE).format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         assertThat(NoGenerator.next("PO")).isEqualTo("PO" + day + "00000001");
         assertThat(NoGenerator.next("PO")).isEqualTo("PO" + day + "00000002");
         assertThat(NoGenerator.next("SO")).isEqualTo("SO" + day + "00000001");
