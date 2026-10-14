@@ -69,22 +69,25 @@ public class UserAdminService {
     public UserView update(Long id, UserReqs.Update req) {
         SysUser u = require(id);
         com.akarin.erp.common.util.Versions.requirePresent(req.version());
-        u.setRealName(req.realName());
-        u.setVersion(req.version());
-        com.akarin.erp.common.util.Versions.requireUpdated(userMapper.updateById(u) == 1);
-        return view(u);
+        // 只更新可编辑字段（real_name），WHERE id + 客户端 version；不整行写回，避免覆盖并发提交的 status / password / token_version
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id).eq(SysUser::getVersion, req.version())
+                .set(SysUser::getRealName, req.realName())
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("version = version + 1")));
+        return view(require(id));
     }
 
     @Transactional
     public void resetPassword(Long id, String password) {
         require(id);
-        // 有意绕过乐观锁：改密是安全操作，不应因为别人刚改过姓名（version 变了）而失败。
-        // 只定向更新 password，并同时递增 token_version（旧 token 立即失效）和 updated_at；不带 version 条件，也不改 version。
+        // 定向更新，不校验 version，但会递增 version：并发的“改姓名”拿着旧 version 提交会得到 40900，
+        // 而不会把旧的 status / password / token_version 写回去。前端拿旧 version 提交得到 40900 是预期行为（重新查详情即可）。
         Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
                 .eq(SysUser::getId, id)
                 .set(SysUser::getPassword, encoder.encode(password))
                 .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
-                .setSql("token_version = token_version + 1")));
+                .setSql("token_version = token_version + 1, version = version + 1")));
     }
 
     @Transactional
@@ -94,13 +97,13 @@ public class UserAdminService {
             if (isSelf(u)) throw new BizException("不能停用当前登录用户");
             guardLastAdmin(u, "停用");
         }
-        // 有意绕过乐观锁：启用 / 停用是安全操作，不应因为别人刚改过姓名而失败或静默不生效。
-        // 只定向更新 status，同时递增 token_version（停用后旧 token 立即失效）和 updated_at。
+        // 定向更新，不校验 version，但会递增 version：并发的“改姓名”拿着旧 version 提交会得到 40900，
+        // 而不会把旧的 status / password / token_version 写回去。前端拿旧 version 提交得到 40900 是预期行为（重新查详情即可）。
         Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
                 .eq(SysUser::getId, id)
                 .set(SysUser::getStatus, enabled ? SysUser.ENABLED : SysUser.DISABLED)
                 .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
-                .setSql("token_version = token_version + 1")));
+                .setSql("token_version = token_version + 1, version = version + 1")));
         return view(require(id));
     }
 
@@ -108,7 +111,7 @@ public class UserAdminService {
     public UserView assignRoles(Long id, List<Long> roleIds) {
         SysUser u = require(id);
         replaceRoles(u, roleIds);
-        Versions.requireOneRow(userMapper.bumpTokenVersion(id));   // 定向 SQL，不受乐观锁影响
+        Versions.requireOneRow(userMapper.bumpTokenVersion(id));   // 定向 SQL：不校验 version，但 token_version 和 version 都 +1
         return view(require(id));
     }
 

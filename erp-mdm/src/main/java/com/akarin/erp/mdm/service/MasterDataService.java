@@ -49,9 +49,14 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
         com.akarin.erp.common.util.Versions.requirePresent(patch.getVersion());
         if (patch.getCode() != null && !patch.getCode().equals(existing.getCode()))
             throw new BizException("编码不可修改: " + existing.getCode());
-        patch.setId(id);
-        patch.setCode(existing.getCode());
-        com.akarin.erp.common.util.Versions.requireUpdated(updateById(patch));
+        Integer clientVersion = patch.getVersion();
+        // 只 SET 请求里带了的可编辑字段（name/spec/status...，updated_at 自动填充）；id、编码、version、审计字段一律不写回。
+        // WHERE id + 客户端 version，同时 version = version + 1；0 行 → 40900。不再整行 updateById。
+        patch.setId(null); patch.setCode(null); patch.setVersion(null);
+        patch.setDeleted(null); patch.setCreatedAt(null); patch.setCreatedBy(null);
+        com.akarin.erp.common.util.Versions.requireOneRow(baseMapper.update(patch,
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<E>()
+                        .eq("id", id).eq("version", clientVersion).setSql("version = version + 1")));
         return require(id);
     }
 

@@ -30,7 +30,8 @@ public class AdminInitializer implements ApplicationRunner {
             // 定向更新密码，不走乐观锁（启动初始化，不应受 version 影响）
             int rows = userMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<SysUser>()
                     .eq(SysUser::getId, admin.getId())
-                    .set(SysUser::getPassword, encoder.encode(adminPassword)));
+                    .set(SysUser::getPassword, encoder.encode(adminPassword))
+                    .setSql("token_version = token_version + 1, version = version + 1"));   // 不校验 version，但递增 version
             if (rows != 1) throw new IllegalStateException("初始化 admin 密码失败");
             log.info("initialized admin password");
         }

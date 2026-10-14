@@ -45,10 +45,14 @@ public class PermissionAdminService {
         SysPermission p = require(id);
         if (req.code() != null && !p.getCode().equals(req.code())) throw new BizException("权限点编码不可修改");   // 不传 = 不改
         com.akarin.erp.common.util.Versions.requirePresent(req.version());
-        p.setName(req.name());
-        p.setVersion(req.version());
-        com.akarin.erp.common.util.Versions.requireUpdated(permissionMapper.updateById(p) == 1);
-        return p;
+        // 只更新可编辑字段（name），WHERE id + 客户端 version，不整行写回
+        com.akarin.erp.common.util.Versions.requireOneRow(permissionMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<SysPermission>()
+                        .eq(SysPermission::getId, id).eq(SysPermission::getVersion, req.version())
+                        .set(SysPermission::getName, req.name())
+                        .set(SysPermission::getUpdatedAt, java.time.LocalDateTime.now())
+                        .setSql("version = version + 1")));
+        return require(id);
     }
 
     @Transactional

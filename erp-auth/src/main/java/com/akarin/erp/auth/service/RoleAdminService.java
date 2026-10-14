@@ -56,10 +56,14 @@ public class RoleAdminService {
         SysRole r = require(id);
         if (req.code() != null && !r.getCode().equals(req.code())) throw new BizException("角色编码不可修改");   // 不传 = 不改
         com.akarin.erp.common.util.Versions.requirePresent(req.version());
-        r.setName(req.name());
-        r.setVersion(req.version());
-        com.akarin.erp.common.util.Versions.requireUpdated(roleMapper.updateById(r) == 1);
-        return view(r);
+        // 只更新可编辑字段（name），WHERE id + 客户端 version，不整行写回
+        com.akarin.erp.common.util.Versions.requireOneRow(roleMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<SysRole>()
+                        .eq(SysRole::getId, id).eq(SysRole::getVersion, req.version())
+                        .set(SysRole::getName, req.name())
+                        .set(SysRole::getUpdatedAt, java.time.LocalDateTime.now())
+                        .setSql("version = version + 1")));
+        return view(require(id));
     }
 
     @Transactional
