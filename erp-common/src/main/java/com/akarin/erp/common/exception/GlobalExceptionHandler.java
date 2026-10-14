@@ -25,6 +25,7 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(BizException.class)
+    /** 业务异常：按 ErrorCode 映射，如 40001、40900、40901、40902、40903（单据状态已变更 → HTTP 409） */
     public ResponseEntity<R<Void>> biz(BizException e) { return of(e.getErrorCode(), e.getMessage()); }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

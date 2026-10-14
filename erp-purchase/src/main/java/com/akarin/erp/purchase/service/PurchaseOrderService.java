@@ -54,39 +54,46 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         o.setWarehouseId(req.warehouseId());
         o.setRemark(req.remark());
         o.setStatus("DRAFT");
-        o.setTotalAmount(BigDecimal.ZERO);
+        // 先校验明细、算好合计再一次性插入：不再回写合计，新单 version = 0
+        List<PurchaseOrderItem> items = buildItems(req.items().stream()
+                .map(l -> new Line(l.materialId(), l.qty(), l.price())).toList());
+        o.setTotalAmount(totalOf(items));
         o.setVersion(0);
         save(o);
-        BigDecimal total = replaceItems(o.getId(), req.items().stream()
-                .map(l -> new Line(l.materialId(), l.qty(), l.price())).toList());
-        // 定向回写合计：不整行写回，同时 version + 1
-        Versions.requireOneRow(baseMapper.update(null, new LambdaUpdateWrapper<PurchaseOrder>()
-                .eq(PurchaseOrder::getId, o.getId())
-                .set(PurchaseOrder::getTotalAmount, total)
-                .set(PurchaseOrder::getUpdatedAt, LocalDateTime.now())
-                .setSql("version = version + 1")));
+        insertItems(o.getId(), items);
         return detail(o.getId());
     }
 
     /** 草稿编辑：WHERE id + 客户端 version，只 SET 可编辑字段；明细整单替换 */
     @Transactional
     public PurchaseOrderDetail update(Long id, PurchaseOrderUpdateReq req) {
-        Versions.requirePresent(req.version());
-        PurchaseOrder o = require(id);
-        if (!"DRAFT".equals(o.getStatus()))
-            throw new BizException("仅草稿可编辑，当前: " + o.getStatus());
+        PurchaseOrder o = require(id);              // 先判存在：不存在 404
+        Versions.requirePresent(req.version());     // 再判 version：缺失 400
+        // 引用检查（供应商、仓库、物料）属于输入校验，先于状态判断：非草稿订单引用不存在的对象也返回 400
         supplierService.requireRef(req.supplierId());
         warehouseService.requireRef(req.warehouseId());
-        BigDecimal total = replaceItems(id, req.items().stream()
+        List<PurchaseOrderItem> items = buildItems(req.items().stream()
                 .map(l -> new Line(l.materialId(), l.qty(), l.price())).toList());
-        Versions.requireOneRow(baseMapper.update(null, new LambdaUpdateWrapper<PurchaseOrder>()
+        requireDraft(o);
+        BigDecimal total = totalOf(items);
+        itemMapper.delete(new LambdaQueryWrapper<PurchaseOrderItem>().eq(PurchaseOrderItem::getOrderId, id));
+        insertItems(id, items);
+        int rows = baseMapper.update(null, new LambdaUpdateWrapper<PurchaseOrder>()
                 .eq(PurchaseOrder::getId, id).eq(PurchaseOrder::getVersion, req.version())
+                .eq(PurchaseOrder::getStatus, "DRAFT")
                 .set(PurchaseOrder::getSupplierId, req.supplierId())
                 .set(PurchaseOrder::getWarehouseId, req.warehouseId())
                 .set(PurchaseOrder::getRemark, req.remark())
                 .set(PurchaseOrder::getTotalAmount, total)
                 .set(PurchaseOrder::getUpdatedAt, LocalDateTime.now())
-                .setSql("version = version + 1")));
+                .setSql("version = version + 1"));
+        if (rows != 1) {
+            // 0 行：重读区分原因——已不是草稿（被并发提交/审批）→ 409/40903；否则 version 过期 → 40900。事务回滚，明细替换一并撤销
+            // 必须加锁读：MySQL REPEATABLE READ 下普通 SELECT 读的是本事务开头 require(id) 建立的快照，
+            // 会把已被并发提交的订单仍看成 DRAFT 而误报 40900；FOR UPDATE 是当前读，拿到最新已提交的状态（H2 同样支持）
+            requireDraft(requireLatest(id));
+            Versions.requireOneRow(rows);
+        }
         return detail(id);
     }
 
@@ -144,27 +151,47 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
         BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
         publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.PURCHASE_RECEIPT,
                 d.order().getOrderNo(), d.order().getSupplierId(), amount));
-        return d;
+        return detail(id);   // 重新读取：返回的 status / version 与库里一致
     }
 
     private record Line(Long materialId, BigDecimal qty, BigDecimal price) {}
 
-    private BigDecimal replaceItems(Long orderId, List<Line> lines) {
-        itemMapper.delete(new LambdaQueryWrapper<PurchaseOrderItem>().eq(PurchaseOrderItem::getOrderId, orderId));
-        BigDecimal total = BigDecimal.ZERO;
+    /** 校验物料并计算每行金额（不落库） */
+    private List<PurchaseOrderItem> buildItems(List<Line> lines) {
+        List<PurchaseOrderItem> items = new java.util.ArrayList<>();
         int lineNo = 0;
         for (var l : lines) {
             lineNo++;
             materialService.requireRef(l.materialId());
             PurchaseOrderItem it = new PurchaseOrderItem();
-            it.setOrderId(orderId); it.setMaterialId(l.materialId());
-            it.setQty(l.qty()); it.setPrice(l.price());
+            it.setMaterialId(l.materialId());
+            it.setQty(l.qty()); it.setPrice(l.price());   // 单价原样保存（最多 4 位小数）
             it.setAmount(Money.requireFitsAmountColumn(Money.lineAmount(l.qty(), l.price()), "第 " + lineNo + " 行金额"));
-            itemMapper.insert(it);
-            total = Money.of(total.add(it.getAmount()));
+            items.add(it);
         }
-        Money.requireFitsAmountColumn(total, "订单合计金额");
-        return total;
+        return items;
+    }
+
+    private BigDecimal totalOf(List<PurchaseOrderItem> items) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (var it : items) total = Money.of(total.add(it.getAmount()));
+        return Money.requireFitsAmountColumn(total, "订单合计金额");
+    }
+
+    private void insertItems(Long orderId, List<PurchaseOrderItem> items) {
+        for (var it : items) { it.setOrderId(orderId); itemMapper.insert(it); }
+    }
+
+    private void requireDraft(PurchaseOrder o) {
+        if (!"DRAFT".equals(o.getStatus())) throw new BizException(ErrorCode.ORDER_STATUS_CHANGED, ErrorCode.ORDER_STATUS_CHANGED.getDefaultMsg());   // 不是草稿 → 409/40903
+    }
+
+    /** 加锁当前读（SELECT ... FOR UPDATE），绕过 RR 快照 */
+    private PurchaseOrder requireLatest(Long id) {
+        PurchaseOrder o = baseMapper.selectOne(new LambdaQueryWrapper<PurchaseOrder>()
+                .eq(PurchaseOrder::getId, id).last("FOR UPDATE"));
+        if (o == null) throw new BizException(ErrorCode.NOT_FOUND, "单据不存在: " + id);
+        return o;
     }
 
     private PurchaseOrder require(Long id) {

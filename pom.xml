@@ -15,7 +15,9 @@
     <module>erp-finance</module>
     <module>erp-boot</module>
   </modules>
-  <properties><java.version>17</java.version><mybatis-plus.version>3.5.7</mybatis-plus.version><jjwt.version>0.12.6</jjwt.version></properties>
+  <properties><java.version>17</java.version><mybatis-plus.version>3.5.7</mybatis-plus.version><jjwt.version>0.12.6</jjwt.version>
+    <!-- 默认排除 @Tag("mysql") 用例（需要真实 MySQL）；mvn -Pmysql-it 只跑这些 -->
+    <excludedGroups>mysql</excludedGroups></properties>
   <dependencyManagement><dependencies>
     <dependency><groupId>com.akarin</groupId><artifactId>erp-common</artifactId><version>${project.version}</version></dependency>
     <dependency><groupId>com.akarin</groupId><artifactId>erp-auth</artifactId><version>${project.version}</version></dependency>
@@ -40,4 +42,11 @@
       <executions><execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals></execution></executions>
     </plugin>
   </plugins></build>
+  <profiles>
+    <!-- MySQL 集成用例：mvn -B -Pmysql-it -pl erp-boot -am test（CI 的 MySQL smoke job） -->
+    <profile>
+      <id>mysql-it</id>
+      <properties><groups>mysql</groups><excludedGroups>none</excludedGroups><jacoco.skip>true</jacoco.skip></properties>
+    </profile>
+  </profiles>
 </project>

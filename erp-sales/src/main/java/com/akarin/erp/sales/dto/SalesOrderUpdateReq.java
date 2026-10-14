@@ -10,8 +10,7 @@ import java.util.List;
 
 /** 草稿编辑：须带查询到的 version；只改可编辑字段，不整行写回 */
 public record SalesOrderUpdateReq(
-        @NotNull(message = "version 不能为空（请先查询详情拿到最新 version）",
-                payload = com.akarin.erp.common.validation.FullMessage.class) Integer version,
+        /* 不在这里 @NotNull：服务层先判存在（404）再判 version（400） */ Integer version,
         @NotNull Long customerId, @NotNull Long warehouseId, String remark,
         @NotEmpty @Valid List<Line> items) {
     public record Line(@NotNull Long materialId,

@@ -40,8 +40,10 @@ public class InventoryService {
         materialService.requireRef(materialId);
         warehouseService.requireRef(warehouseId);
         for (int i = 0; i < MAX_RETRY; i++) {
+            // 重试时必须加锁当前读：MySQL REPEATABLE READ 下普通 SELECT 仍读本事务快照里的旧 version，重试永远 0 行
             Stock s = stockMapper.selectOne(new LambdaQueryWrapper<Stock>()
-                    .eq(Stock::getMaterialId, materialId).eq(Stock::getWarehouseId, warehouseId));
+                    .eq(Stock::getMaterialId, materialId).eq(Stock::getWarehouseId, warehouseId)
+                    .last(i > 0, "FOR UPDATE"));
             if (s == null) {
                 if ("OUT".equals(dir)) throw new BizException("库存不足");
                 s = new Stock();
