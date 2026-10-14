@@ -71,9 +71,9 @@ class VersionAndDecimalIntegrationTest extends SysTestSupport {
         assertThat(dis.path("enabled").asBoolean()).isFalse();
         assertThat(ok(admin, "GET", url, null).path("enabled").asBoolean()).isFalse();
         assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"newpass123\"}")).isEqualTo(403);
-        // 姓名没被这些安全操作覆盖，version 也没被改动
+        // 姓名没被这些安全操作覆盖；安全操作不校验 version 但会递增 version
         assertThat(ok(admin, "GET", url, null).path("realName").asText()).isEqualTo("再改名");
-        assertThat(ver(admin, url)).isEqualTo(v + 2);
+        assertThat(ver(admin, url)).as("改名×2 + 改密 + 停用，每次都递增 version").isEqualTo(v + 4);
         // 重新启用后可以登录
         ok(admin, "PUT", url + "/status", "{\"enabled\":true}");
         assertThat(code(null, "POST", "/api/auth/login", "{\"username\":\"" + u.username() + "\",\"password\":\"newpass123\"}")).isZero();
