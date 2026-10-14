@@ -14,6 +14,6 @@ import org.springframework.test.context.ActiveProfiles;
 @Import(ReversedOrderRaceSupport.Hook.class)
 class ReversedOrderRaceMySqlTest extends ReversedOrderRaceSupport {
     @Test void reversedOrderReceiveAndShipNoDeadlock() throws Exception {
-        reversedOrderRace(login("admin", System.getenv().getOrDefault("ERP_ADMIN_PASSWORD", "admin123")));
+        reversedOrderRace(login("admin", TestCredentials.ADMIN_PASSWORD));
     }
 }

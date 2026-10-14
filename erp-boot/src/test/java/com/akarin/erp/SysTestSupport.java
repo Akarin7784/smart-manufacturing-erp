@@ -14,8 +14,8 @@ abstract class SysTestSupport extends ApiTestSupport {
     String admin;
     Map<String, Long> permIds = new HashMap<>();
 
-    @BeforeEach void loginAdmin() throws Exception {
-        admin = login("admin", "admin123");
+    @BeforeEach void setUpAdmin() throws Exception {
+        admin = loginAdmin();
         for (JsonNode p : ok(admin, "GET", "/api/sys/permissions", null)) permIds.put(p.path("code").asText(), p.path("id").asLong());
     }
 

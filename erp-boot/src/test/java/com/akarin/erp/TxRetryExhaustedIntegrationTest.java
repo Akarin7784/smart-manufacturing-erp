@@ -20,6 +20,10 @@ import org.springframework.dao.DeadlockLoserDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.jdbc.UncategorizedSQLException;
+import org.h2.api.ErrorCode;
+import org.h2.message.DbException;
+import org.h2.mvstore.DataUtils;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -64,7 +68,7 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
     @BeforeEach void setUp() throws Exception {
         log = new ListAppender<>(); log.start();
         ((Logger) LoggerFactory.getLogger(TxRetry.class)).addAppender(log);
-        admin = login("admin", "admin123");
+        admin = loginAdmin();
         wh = mdm(admin, "warehouses", "XW"); mat = mdm(admin, "materials", "XM"); sup = mdm(admin, "suppliers", "XS");
         ok(admin, "POST", "/api/inventory/in", "{\"materialId\":" + mat + ",\"warehouseId\":" + wh + ",\"qty\":\"10\"}");
     }
@@ -103,9 +107,59 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         assertExhaustedIs409(() -> new DeadlockLoserDataAccessException("forced deadlock", null));
     }
 
-    /** H2 上锁超时后回滚失败（CLOSED -> ROLLING_BACK）这一类：同样重试，耗尽后 409 而不是 500 */
-    @Test void rollbackFailureThreeTimesIs409NotServerError() throws Exception {
-        assertExhaustedIs409(() -> new TransactionSystemException("JDBC rollback failed"));
+    /** 真实 H2 死锁异常（40001）在 SQL 执行时以 UncategorizedSQLException 抛出：cause 链是锁冲突 → 重试 → 409/40900 */
+    @Test void uncategorizedWithH2DeadlockCauseRetriedThen409() throws Exception {
+        assertExhaustedIs409(() -> new UncategorizedSQLException("StatementCallback", null,
+                DbException.get(ErrorCode.DEADLOCK_1, "inv_stock").getSQLException()));
+    }
+
+    /** 真实的 H2 "illegally transitioned from CLOSED to ROLLING_BACK"（50000 / HY000，cause 为 MVStoreException，无锁错误码）：
+     *  不重试，保持 500，日志 ERROR 带 op 与异常类，不带 SQL */
+    @Test void uncategorizedIllegalTransitionIs500WithErrorLogAndNoSql() throws Exception {
+        long id = approvedOrder();
+        java.sql.SQLException real = DbException.convert(DataUtils.newMVStoreException(
+                DataUtils.ERROR_TRANSACTION_ILLEGAL_STATE, "Transaction was illegally transitioned from {0} to {1}", "CLOSED", "ROLLING_BACK"))
+                .getSQLException();
+        assertThat(real.getErrorCode()).isEqualTo(50000);
+        assertThat(real.getMessage()).contains("illegally transitioned from CLOSED to ROLLING_BACK");
+        failure = () -> new UncategorizedSQLException("StatementCallback", "SELECT secret_column FROM inv_stock WHERE id = 42", real);
+        failuresLeft.set(1);
+        ListAppender<ILoggingEvent> handlerLog = new ListAppender<>(); handlerLog.start();
+        Logger h = (Logger) LoggerFactory.getLogger(com.akarin.erp.common.exception.GlobalExceptionHandler.class);
+        h.addAppender(handlerLog);
+        try {
+            var res = mvc.perform(post("/api/purchase/orders/" + id + "/receive").header("Authorization", "Bearer " + admin)).andReturn().getResponse();
+            assertThat(res.getStatus()).isEqualTo(500);
+            assertThat(res.getContentAsString()).contains("\"code\":500").doesNotContain("secret_column");
+        } finally { h.detachAppender(handlerLog); }
+        assertThat(failuresLeft.get()).as("只尝试 1 次").isEqualTo(0);
+        assertThat(log.list).hasSize(1);
+        ILoggingEvent e = log.list.get(0);
+        assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+        assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(UncategorizedSQLException.class.getName())
+                .contains("errorCode=50000").doesNotContain("secret_column");
+        assertThat(e.getThrowableProxy()).as("不附带异常（异常消息里有 SQL）").isNull();
+        assertThat(handlerLog.list).isNotEmpty().allSatisfy(ev -> {
+            assertThat(ev.getFormattedMessage()).doesNotContain("secret_column");
+            assertThat(ev.getThrowableProxy()).isNull();
+        });
+        assertThat(jdbc.queryForObject("SELECT status FROM pur_order WHERE id=?", String.class, id)).isEqualTo("APPROVED");
+    }
+
+    /** 业务异常导致回滚、回滚又失败（TransactionSystemException 带 applicationException）：返回原业务码，0 次重试 */
+    @Test void businessExceptionBehindRollbackFailureKeepsBizCodeNoRetry() throws Exception {
+        long id = approvedOrder();
+        failure = () -> {
+            TransactionSystemException t = new TransactionSystemException("JDBC rollback failed");
+            t.initApplicationException(new com.akarin.erp.common.exception.BizException("库存不足，当前可用: 0"));
+            return t;
+        };
+        failuresLeft.set(3);
+        var res = mvc.perform(post("/api/purchase/orders/" + id + "/receive").header("Authorization", "Bearer " + admin)).andReturn().getResponse();
+        assertThat(res.getStatus()).isEqualTo(400);
+        assertThat(res.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).contains("\"code\":400").contains("库存不足");
+        assertThat(failuresLeft.get()).as("只尝试 1 次").isEqualTo(2);
+        assertThat(log.list).as("没有重试日志").isEmpty();
     }
 
     @Test void deadlockTwiceThenSucceeds() throws Exception {
