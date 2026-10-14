@@ -7,14 +7,16 @@ export const ErrorCode = Object.freeze({
   DUPLICATE_CODE: 40001, // HTTP 400 编码重复（含已删除）
   CONCURRENT_MODIFIED: 40900, // HTTP 409 乐观锁/并发冲突
   REFERENCED: 40901, // HTTP 409 被单据引用，不能删除
-  DUPLICATE_REQUEST: 40902 // HTTP 409 同一请求 ID 参数不同的重复提交
+  DUPLICATE_REQUEST: 40902, // HTTP 409 同一请求 ID 参数不同的重复提交
+  STATUS_CHANGED: 40903 // HTTP 409 单据状态已变更（编辑时已非草稿）
 })
 
 export const ERROR_MESSAGES = Object.freeze({
   [ErrorCode.DUPLICATE_CODE]: '编码已存在（含已删除）',
   [ErrorCode.CONCURRENT_MODIFIED]: '数据已被修改，请刷新后重试',
   [ErrorCode.REFERENCED]: '该数据已被单据引用，不能删除，可改为停用',
-  [ErrorCode.DUPLICATE_REQUEST]: '请勿重复提交'
+  [ErrorCode.DUPLICATE_REQUEST]: '请勿重复提交',
+  [ErrorCode.STATUS_CHANGED]: '单据状态已变更，请刷新后重试'
 })
 
 /** 子码 -> HTTP 类别（40001 -> 400）；普通码原样返回 */
