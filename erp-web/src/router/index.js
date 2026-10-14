@@ -16,7 +16,7 @@ export const routes = [
       { path: 'mdm/customers', name: 'mdm-customers', component: MdmList, props: { resource: 'customers' }, meta: { title: '客户管理' } },
       { path: 'mdm/suppliers', name: 'mdm-suppliers', component: MdmList, props: { resource: 'suppliers' }, meta: { title: '供应商管理' } },
       { path: 'mdm/warehouses', name: 'mdm-warehouses', component: MdmList, props: { resource: 'warehouses' }, meta: { title: '仓库管理' } },
-      { path: 'purchase', name: 'purchase', component: Placeholder, meta: { title: '采购管理' } },
+      { path: 'purchase', name: 'purchase', component: () => import('@/views/purchase/PurchaseOrderListView.vue'), meta: { title: '采购管理' } },
       { path: 'sales', name: 'sales', component: Placeholder, meta: { title: '销售管理' } },
       { path: 'inventory', name: 'inventory', component: Placeholder, meta: { title: '库存管理' } },
       { path: 'finance', name: 'finance', component: Placeholder, meta: { title: '财务管理' } }
