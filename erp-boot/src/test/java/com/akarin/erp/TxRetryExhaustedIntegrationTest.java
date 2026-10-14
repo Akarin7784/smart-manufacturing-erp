@@ -85,7 +85,7 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         return id;
     }
 
-    void assertExhaustedIs409(Supplier<RuntimeException> f) throws Exception {
+    void assertExhaustedIs409(Supplier<RuntimeException> f, String kind, String lockClass) throws Exception {
         long id = approvedOrder();
         failure = f; failuresLeft.set(3);
         var res = mvc.perform(post("/api/purchase/orders/" + id + "/receive").header("Authorization", "Bearer " + admin)).andReturn().getResponse();
@@ -96,7 +96,11 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         assertThat(jdbc.queryForObject("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=?", BigDecimal.class, mat, wh)).isEqualByComparingTo("10");
         assertThat(log.list).hasSize(3).allSatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.WARN);
-            assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(f.get().getClass().getName());
+            // 日志写的是触发重试的真实锁异常及类别，而不是外层包装（TransactionSystemException / UncategorizedSQLException）
+            assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains("kind=" + kind)
+                    .contains("exception=" + lockClass + (lockClass.startsWith("org.h2") ? " " : ""))
+                    .doesNotContain("exception=" + TransactionSystemException.class.getName())
+                    .doesNotContain("exception=" + UncategorizedSQLException.class.getName());
         });
         assertThat(log.list.get(0).getFormattedMessage()).contains("attempt=1/3");
         assertThat(log.list.get(1).getFormattedMessage()).contains("attempt=2/3");
@@ -104,13 +108,15 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
     }
 
     @Test void deadlockThreeTimesIs409_40900() throws Exception {
-        assertExhaustedIs409(() -> new DeadlockLoserDataAccessException("forced deadlock", null));
+        assertExhaustedIs409(() -> new DeadlockLoserDataAccessException("forced deadlock", null), "deadlock",
+                DeadlockLoserDataAccessException.class.getName());
     }
 
     /** 真实 H2 死锁异常（40001）在 SQL 执行时以 UncategorizedSQLException 抛出：cause 链是锁冲突 → 重试 → 409/40900 */
     @Test void uncategorizedWithH2DeadlockCauseRetriedThen409() throws Exception {
         assertExhaustedIs409(() -> new UncategorizedSQLException("StatementCallback", null,
-                DbException.get(ErrorCode.DEADLOCK_1, "inv_stock").getSQLException()));
+                DbException.get(ErrorCode.DEADLOCK_1, "inv_stock").getSQLException()), "deadlock",
+                org.h2.jdbc.JdbcSQLTransactionRollbackException.class.getName());
     }
 
     /** 真实的 H2 "illegally transitioned from CLOSED to ROLLING_BACK"（50000 / HY000，cause 为 MVStoreException，无锁错误码）：
@@ -160,6 +166,44 @@ class TxRetryExhaustedIntegrationTest extends ApiTestSupport {
         assertThat(res.getContentAsString(java.nio.charset.StandardCharsets.UTF_8)).contains("\"code\":400").contains("库存不足");
         assertThat(failuresLeft.get()).as("只尝试 1 次").isEqualTo(2);
         assertThat(log.list).as("没有重试日志").isEmpty();
+    }
+
+    /** 锁超时导致回滚、回滚又失败：日志写 lock-timeout 与真实的 H2 超时异常类，不写 TransactionSystemException */
+    @Test void lockTimeoutBehindRollbackFailureLogsRealLockType() throws Exception {
+        assertExhaustedIs409(() -> {
+            TransactionSystemException t = new TransactionSystemException("JDBC rollback failed");
+            t.initApplicationException(new org.springframework.dao.CannotAcquireLockException("lock timeout",
+                    DbException.get(ErrorCode.LOCK_TIMEOUT_1, "inv_stock").getSQLException()));
+            return t;
+        }, "lock-timeout", org.h2.jdbc.JdbcSQLTimeoutException.class.getName());
+        assertThat(log.list.get(0).getFormattedMessage()).contains("errorCode=50200");
+    }
+
+    /** 回滚失败且没有原始异常：500；TxRetry 与全局处理器都只打简短 ERROR（op/类/SQLState/错误码），不带 SQL、不带堆栈 */
+    @Test void bareRollbackFailureIs500WithConciseErrorNoStack() throws Exception {
+        long id = approvedOrder();
+        failure = () -> new TransactionSystemException("JDBC rollback failed: SELECT secret_column FROM inv_stock",
+                new java.sql.SQLException("connection broken during SELECT secret_column", "08S01", 0));
+        failuresLeft.set(1);
+        ListAppender<ILoggingEvent> handlerLog = new ListAppender<>(); handlerLog.start();
+        Logger h = (Logger) LoggerFactory.getLogger(com.akarin.erp.common.exception.GlobalExceptionHandler.class);
+        h.addAppender(handlerLog);
+        try {
+            var res = mvc.perform(post("/api/purchase/orders/" + id + "/receive").header("Authorization", "Bearer " + admin)).andReturn().getResponse();
+            assertThat(res.getStatus()).isEqualTo(500);
+            assertThat(res.getContentAsString()).doesNotContain("secret_column");
+        } finally { h.detachAppender(handlerLog); }
+        assertThat(failuresLeft.get()).as("只尝试 1 次").isEqualTo(0);
+        assertThat(log.list).hasSize(1);
+        ILoggingEvent e = log.list.get(0);
+        assertThat(e.getLevel()).isEqualTo(Level.ERROR);
+        assertThat(e.getFormattedMessage()).contains("op=purchase.receive#" + id).contains(TransactionSystemException.class.getName())
+                .contains("sqlState=08S01").doesNotContain("secret_column");
+        assertThat(e.getThrowableProxy()).isNull();
+        assertThat(handlerLog.list).isNotEmpty().allSatisfy(ev -> {
+            assertThat(ev.getFormattedMessage()).doesNotContain("secret_column").doesNotContain("unexpected");
+            assertThat(ev.getThrowableProxy()).as("不打完整堆栈").isNull();
+        });
     }
 
     @Test void deadlockTwiceThenSucceeds() throws Exception {

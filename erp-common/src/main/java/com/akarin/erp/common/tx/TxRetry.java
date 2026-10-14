@@ -32,8 +32,14 @@ import java.util.function.Supplier;
 @Component
 public class TxRetry {
     static final int MAX_ATTEMPTS = 3;
-    /** MySQL 1205 锁等待超时、1213 死锁；H2 50200 锁超时、40001 死锁 */
+    /**
+     * 锁冲突错误码（SQLException.getErrorCode()）：
+     * MySQL 1205 锁等待超时、1213 死锁；H2 50200 锁超时（LOCK_TIMEOUT_1）、40001 死锁（DEADLOCK_1）。
+     * 注意 40001 同时也是 MySQL 1213 的 SQLState（下面另按 SQLState 40001 判断）。两处重叠是有意的：
+     * H2 的死锁错误码恰好等于标准 SQLState，按错误码和按 SQLState 都能识别，任一命中即可。
+     */
     static final Set<Integer> LOCK_ERROR_CODES = Set.of(1205, 1213, 50200, 40001);
+    static final Set<Integer> TIMEOUT_CODES = Set.of(1205, 50200);
 
     public <T> T run(String op, Supplier<T> txWork) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) return txWork.get();
@@ -44,18 +50,20 @@ public class TxRetry {
                 Throwable original = original(e);
                 if (!isLockConflict(original)) {
                     if (original != e && original instanceof RuntimeException r) throw r;   // 业务异常等：原码返回，不重试
-                    if (e instanceof UncategorizedSQLException u) {
-                        SQLException s = u.getSQLException();
+                    if (e instanceof UncategorizedSQLException || e instanceof TransactionSystemException) {
+                        // 简短 ERROR：op、异常类、SQLState、错误码；不带 SQL（异常消息里有）也不带堆栈 → 500
+                        SQLException s = sqlCause(e);
                         log.error("tx failed (not a lock conflict, no retry): op={} exception={} sqlState={} errorCode={}",
                                 op, e.getClass().getName(), s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
                     }
                     throw e;
                 }
+                Throwable lock = lockCause(original);
                 if (attempt >= MAX_ATTEMPTS) {
-                    log.warn("tx retry exhausted: op={} attempts={} exception={}", op, attempt, e.getClass().getName());
+                    log.warn("tx retry exhausted: op={} attempts={} kind={} exception={}{}", op, attempt, kind(lock), lock.getClass().getName(), codes(lock));
                     throw asLockFailure(e);
                 }
-                log.warn("tx retry: op={} attempt={}/{} exception={}", op, attempt, MAX_ATTEMPTS, e.getClass().getName());
+                log.warn("tx retry: op={} attempt={}/{} kind={} exception={}{}", op, attempt, MAX_ATTEMPTS, kind(lock), lock.getClass().getName(), codes(lock));
                 try {
                     Thread.sleep(ThreadLocalRandom.current().nextLong(5, 30L * attempt));
                 } catch (InterruptedException ie) {
@@ -72,12 +80,41 @@ public class TxRetry {
         return e;
     }
 
-    static boolean isLockConflict(Throwable e) {
+    static boolean isLockConflict(Throwable e) { return lockCause(e) != null; }
+
+    /** cause 链上第一个真正的锁冲突（Spring 的锁异常或带锁错误码的 SQLException）；没有则 null */
+    static Throwable lockCause(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
-            if (t instanceof PessimisticLockingFailureException) return true;
-            if (t instanceof SQLException s && (LOCK_ERROR_CODES.contains(s.getErrorCode()) || "40001".equals(s.getSQLState()))) return true;
+            if (t instanceof PessimisticLockingFailureException) {
+                // 优先报更底层的带错误码 SQLException（更具体）
+                SQLException s = sqlCause(t);
+                return s != null && isLockSql(s) ? s : t;
+            }
+            if (t instanceof SQLException s && isLockSql(s)) return t;
         }
-        return false;
+        return null;
+    }
+
+    private static boolean isLockSql(SQLException s) {
+        return LOCK_ERROR_CODES.contains(s.getErrorCode()) || "40001".equals(s.getSQLState());
+    }
+
+    /** deadlock / lock-timeout，用于日志 */
+    static String kind(Throwable lock) {
+        if (lock instanceof CannotAcquireLockException) return "lock-timeout";
+        if (lock instanceof SQLException s && TIMEOUT_CODES.contains(s.getErrorCode())) return "lock-timeout";
+        if (lock instanceof SQLException s && "HYT00".equals(s.getSQLState())) return "lock-timeout";
+        return "deadlock";
+    }
+
+    private static String codes(Throwable t) {
+        return t instanceof SQLException s ? " sqlState=" + s.getSQLState() + " errorCode=" + s.getErrorCode() : "";
+    }
+
+    static SQLException sqlCause(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause())
+            if (t instanceof SQLException s) return s;
+        return null;
     }
 
     private static PessimisticLockingFailureException asLockFailure(RuntimeException e) {

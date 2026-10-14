@@ -169,6 +169,10 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 ALTER TABLE mdm_material MODIFY created_at DATETIME DEFAULT CURRENT_TIMESTAMP, MODIFY updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 -- mdm_customer / mdm_supplier / mdm_warehouse 等其他表同理
 ```
+从 #18 起单号用数据库序列表（启动时 `CREATE TABLE IF NOT EXISTS` 会自动建，也可手工执行）：
+```sql
+CREATE TABLE IF NOT EXISTS sys_doc_seq (seq_key VARCHAR(64) NOT NULL PRIMARY KEY, val BIGINT NOT NULL);
+```
 新的权限点（8 `sys:read`、9 `sys:write`、10 `workflow:admin`）由 `data.sql` 幂等插入，启动时自动补齐。
 
 ## 乐观锁（version）
@@ -291,3 +295,15 @@ mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率�
 ## 库存加锁顺序与流水
 
 采购收货、销售发货时，同一单据里同一 (物料, 仓库) 的多行会先合并数量，再按 (materialId, warehouseId) 升序逐个加锁更新库存，所有事务以相同顺序取锁，避免正反序单据并发死锁。库存流水按合并后的 (物料, 仓库) 各记一条，数量为该单据的合计，与库存行的一次变动一一对应（同一物料在单据里写了两行，只生成一条流水）。
+
+## 单号与库存流水前缀（#18）
+
+- **单号格式**：`前缀 + yyyyMMdd + 8 位序号`（如 `PO2026101400000001`），序号来自表 `sys_doc_seq`（按 `前缀+日期` 一行，`INSERT ... ON DUPLICATE KEY UPDATE val = val + 1`）。多实例共享同一库即不会重号。旧格式（前缀 + 14 位时间 + 4 位进程内序号 + 3 位随机数）的历史单号保持不变。
+- 取号走独立的小连接池（`doc-no`，最多 4 个连接）里的短事务，立即提交：序列行锁不会持到业务事务结束（否则所有收货会串行，并可能与库存行锁形成死锁），也不占业务连接池。代价是业务回滚后**号可能跳号**，单号只保证唯一、递增，不保证连续。
+- **库存流水前缀**：入库 `SMI`、出库 `SMO`，不再与销售订单的 `SO` 冲突。历史流水（`SI…`/`SO…`）不迁移（`txn_no` 无唯一约束，也不被其他表引用）；按前缀筛选流水时需同时考虑旧前缀。
+- **软删除的库存行**：`inv_stock` 的唯一键 (material_id, warehouse_id) 包含已软删除的行。出库仍视为无库存（400 库存不足），行保持删除状态；入库时复活该行：`deleted=0`、数量从 0 起算（旧数量作废）、`version+1`，再加上本次入库量。
+
+## 事务重试日志
+
+- 重试 / 重试耗尽的 WARN 写出真实的锁异常（例如 `com.mysql.cj.jdbc.exceptions.MySQLTransactionRollbackException` 或 H2 的 `JdbcSQLTimeoutException`）、`kind=deadlock|lock-timeout` 以及 `sqlState` / `errorCode`，而不是外层的 `TransactionSystemException` / `UncategorizedSQLException`。
+- 回滚失败且没有原始业务异常时返回 500，只记一条简短 ERROR（op、异常类、SQLState、错误码），不含 SQL，也不打堆栈。

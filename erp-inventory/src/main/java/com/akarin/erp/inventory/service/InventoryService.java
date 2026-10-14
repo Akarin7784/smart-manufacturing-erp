@@ -24,6 +24,9 @@ import java.util.TreeMap;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
+    /** 库存流水号前缀（#18 b）：SMI 入库 / SMO 出库。原来的 SI / SO 中 SO 与销售单号前缀相同；历史流水号保持不变 */
+    public static final String TXN_PREFIX_IN = "SMI";
+    public static final String TXN_PREFIX_OUT = "SMO";
     private final StockMapper stockMapper;
     private final StockTxnMapper txnMapper;
     private final MaterialService materialService;
@@ -97,7 +100,7 @@ public class InventoryService {
         // 行已加锁，version 不会被别人改；仍按乐观锁写并要求恰好 1 行，防御性兜底
         Versions.requireOneRow(stockMapper.updateById(s));
         StockTxn t = new StockTxn();
-        t.setTxnNo(NoGenerator.next("IN".equals(dir) ? "SI" : "SO"));
+        t.setTxnNo(NoGenerator.next("IN".equals(dir) ? TXN_PREFIX_IN : TXN_PREFIX_OUT));
         t.setDirection(dir); t.setMaterialId(materialId); t.setWarehouseId(warehouseId);
         t.setQty(qty); t.setBalanceAfter(after);
         t.setBizType(bizType == null ? "MANUAL" : bizType); t.setBizNo(bizNo); t.setRemark(remark);
