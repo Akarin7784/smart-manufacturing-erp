@@ -41,6 +41,14 @@ public class TxRetry {
     static final Set<Integer> LOCK_ERROR_CODES = Set.of(1205, 1213, 50200, 40001);
     static final Set<Integer> TIMEOUT_CODES = Set.of(1205, 50200);
 
+    /** 已由 TxRetry 记过 ERROR 的标记（挂在异常的 suppressed 上；无堆栈） */
+    static final RuntimeException LOGGED = new RuntimeException("logged by TxRetry", null, false, false) {};
+
+    public static boolean alreadyLogged(Throwable e) {
+        for (Throwable s : e.getSuppressed()) if (s == LOGGED) return true;
+        return false;
+    }
+
     public <T> T run(String op, Supplier<T> txWork) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) return txWork.get();
         for (int attempt = 1; ; attempt++) {
@@ -55,6 +63,7 @@ public class TxRetry {
                         SQLException s = sqlCause(e);
                         log.error("tx failed (not a lock conflict, no retry): op={} exception={} sqlState={} errorCode={}",
                                 op, e.getClass().getName(), s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+                        e.addSuppressed(LOGGED);   // #22-6：全局处理器看到标记就不再打第二条 ERROR
                     }
                     throw e;
                 }

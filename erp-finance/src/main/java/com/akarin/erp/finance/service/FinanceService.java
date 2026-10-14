@@ -65,6 +65,17 @@ public class FinanceService {
         return b;
     }
 
+    /** 收付款登记的输入校验，不开事务、不取号（#22）；返回需要的单号前缀 */
+    public String validatePayment(PaymentCreateReq req) {
+        String billType = Payment.billTypeOf(req.paymentType());
+        if (ArapBill.AR.equals(billType)) customerService.requireRef(req.partnerId());
+        else supplierService.requireRef(req.partnerId());
+        Money.requireAmount(req.amount(), "收付款金额");
+        return Payment.RECEIPT.equals(req.paymentType()) ? "RC" : "PY";
+    }
+
+    public Payment payment(Long id) { return paymentMapper.selectById(id); }
+
     @Transactional
     public Payment registerPayment(PaymentCreateReq req) {
         String billType = Payment.billTypeOf(req.paymentType());

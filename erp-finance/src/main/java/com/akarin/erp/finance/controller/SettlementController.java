@@ -20,12 +20,18 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class SettlementController {
     private final FinanceService service;
+    private final com.akarin.erp.common.idem.IdempotencyService idem;
     private final PaymentMapper paymentMapper;
     private final SettlementMapper settlementMapper;
 
     @PostMapping("/payments")
     @PreAuthorize("hasAuthority('finance:write')")
-    public R<Payment> register(@Valid @RequestBody PaymentCreateReq req) { return R.ok(service.registerPayment(req)); }
+    public R<Payment> register(@Valid @RequestBody PaymentCreateReq req, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
+        return R.ok(idem.execute(idemKey, "finance.payment.create", req, () -> {
+            String prefix = service.validatePayment(req);
+            return com.akarin.erp.common.util.NoGenerator.reserveThen(java.util.Map.of(prefix, 1), () -> service.registerPayment(req));
+        }, Payment::getId, service::payment));
+    }
 
     @PreAuthorize("hasAuthority('finance:read')")
     @GetMapping("/payments")

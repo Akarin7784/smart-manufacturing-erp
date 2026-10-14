@@ -81,4 +81,42 @@ class NoGeneratorTest {
             for (URLClassLoader l : loaders) l.close();
         }
     }
+
+    /** #22-1：单号日期按 Asia/Shanghai，与 JVM 时区无关 */
+    @Test void dayUsesShanghaiZoneNotJvmZone() {
+        java.util.TimeZone old = java.util.TimeZone.getDefault();
+        java.util.concurrent.atomic.AtomicLong n = new java.util.concurrent.atomic.AtomicLong();
+        NoGenerator.Sequence seq = k -> n.incrementAndGet();
+        NoGenerator.install(seq);
+        try {
+            java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Pacific/Kiritimati"));
+            String day = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")).format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"));
+            assertThat(NoGenerator.next("PY")).startsWith("PY" + day);
+        } finally { java.util.TimeZone.setDefault(old); NoGenerator.uninstall(seq); }
+    }
+
+    /** #22-5：事务外预取；using 内 next() 先消费预取的号，每次 using 从头消费，不够时现取 */
+    @Test void reservedNumbersConsumedFirstAndReusableAcrossAttempts() {
+        java.util.concurrent.atomic.AtomicLong n = new java.util.concurrent.atomic.AtomicLong();
+        NoGenerator.Sequence seq = k -> n.incrementAndGet();
+        NoGenerator.install(seq);
+        try {
+            java.util.function.Supplier<java.util.List<String>> work = NoGenerator.reserved(java.util.Map.of("PO", 1),
+                    () -> java.util.List.of(NoGenerator.next("PO"), NoGenerator.next("PO")));
+            assertThat(n.get()).as("预取在 work 之前").isEqualTo(1);
+            java.util.List<String> a = work.get(), b = work.get();
+            assertThat(a.get(0)).endsWith("00000001");
+            assertThat(b.get(0)).as("重试复用同一个预取号").isEqualTo(a.get(0));
+            assertThat(a.get(1)).as("不够时现取").isNotEqualTo(a.get(0));
+            assertThat(NoGenerator.next("PO")).as("using 外不再消费预取").doesNotEndWith("00000001");
+            assertThat(NoGenerator.reserveThen(java.util.Map.of("SO", 2), () -> NoGenerator.next("SO") + NoGenerator.next("SO"))).hasSize(36);
+        } finally { NoGenerator.uninstall(seq); }
+    }
+
+    @Test void overEightDigitsStillUnique() {
+        NoGenerator.Sequence seq = k -> 100_000_000L;
+        NoGenerator.install(seq);
+        try { assertThat(NoGenerator.next("PO")).endsWith("100000000"); }
+        finally { NoGenerator.uninstall(seq); }
+    }
 }

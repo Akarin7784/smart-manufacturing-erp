@@ -286,3 +286,8 @@ CREATE TABLE IF NOT EXISTS sys_doc_seq (
   seq_key VARCHAR(64) NOT NULL PRIMARY KEY,
   val BIGINT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sys_idempotency (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY, user_name VARCHAR(64) NOT NULL, idem_key VARCHAR(128) NOT NULL,
+  req_hash CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, result_id BIGINT,
+  created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL,
+  UNIQUE KEY uk_idem_user_key (user_name, idem_key), INDEX idx_idem_expires (expires_at));

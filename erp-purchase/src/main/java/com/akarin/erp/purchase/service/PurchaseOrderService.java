@@ -44,6 +44,25 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
     private final InventoryService inventoryService;
     private final ApplicationEventPublisher publisher;
 
+    /** 创建前的输入校验，不开事务、不取号（#22：先校验，再取号，再拿业务连接/开事务） */
+    public void validateCreate(PurchaseOrderCreateReq req) {
+        supplierService.requireRef(req.supplierId());
+        warehouseService.requireRef(req.warehouseId());
+        totalOf(buildItems(req.items().stream().map(l -> new Line(l.materialId(), l.qty(), l.price())).toList()));
+    }
+
+    /**
+     * receive 需要的单号（事务外预取，#22）：库存流水每个合并后的物料一个，加一个AP单号。
+     * 先判状态，非 APPROVED 直接 400，不浪费号；事务内仍会再判一次。
+     */
+    public java.util.Map<String, Integer> receiveNumbers(Long id) {
+        PurchaseOrderDetail d = detail(id);
+        if (!"APPROVED".equals(d.order().getStatus()))
+            throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
+        int n = (int) d.items().stream().map(PurchaseOrderItem::getMaterialId).distinct().count();
+        return java.util.Map.of(InventoryService.TXN_PREFIX_IN, n, "AP", 1);
+    }
+
     @Transactional
     public PurchaseOrderDetail create(PurchaseOrderCreateReq req) {
         supplierService.requireRef(req.supplierId());
