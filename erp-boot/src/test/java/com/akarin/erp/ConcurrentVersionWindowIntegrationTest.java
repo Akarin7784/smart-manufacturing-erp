@@ -42,6 +42,7 @@ class ConcurrentVersionWindowIntegrationTest extends SysTestSupport {
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager txm;
     @Autowired UserAdminService users;
+    @Autowired SysUserMapper userMapper;
     @Autowired RoleAdminService roles;
     @Autowired MaterialService materials;
 
@@ -288,5 +289,21 @@ class ConcurrentVersionWindowIntegrationTest extends SysTestSupport {
                 assertThat(loginCode(u.username(), "newpass123")).as("round " + round).isZero();
             }
         } finally { pool.shutdownNow(); }
+    }
+
+    /** bumpTokenVersionByRole 只更新未软删除的用户：残留的 sys_user_role 关联不会让已删除用户的 version / token_version 变化 */
+    @Test void bumpTokenVersionByRoleSkipsSoftDeletedUsers() throws Exception {
+        Role r = role("BD");
+        User live = user(r), gone = user(r);
+        ok(admin, "DELETE", "/api/sys/users/" + gone.id(), null);
+        // 删除用户时会清掉关联；这里手工补回一条残留关联，模拟脏数据
+        jdbc.update("INSERT INTO sys_user_role(user_id, role_id) VALUES (?, ?)", gone.id(), r.id());
+        String sql = "SELECT version, token_version FROM sys_user WHERE id = ?";
+        Map<String, Object> goneBefore = jdbc.queryForMap(sql, gone.id()), liveBefore = jdbc.queryForMap(sql, live.id());
+        assertThat(userMapper.bumpTokenVersionByRole(r.id())).as("只更新 1 个未删除用户").isEqualTo(1);
+        assertThat(jdbc.queryForMap(sql, gone.id())).as("已软删除用户不被更新").isEqualTo(goneBefore);
+        Map<String, Object> liveAfter = jdbc.queryForMap(sql, live.id());
+        assertThat(((Number) liveAfter.get("version")).longValue()).isEqualTo(((Number) liveBefore.get("version")).longValue() + 1);
+        assertThat(((Number) liveAfter.get("token_version")).longValue()).isEqualTo(((Number) liveBefore.get("token_version")).longValue() + 1);
     }
 }

@@ -35,6 +35,6 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     @Update("UPDATE sys_user SET token_version = token_version + 1, version = version + 1 WHERE id = #{userId} AND deleted = 0")
     int bumpTokenVersion(Long userId);
 
-    @Update("UPDATE sys_user SET token_version = token_version + 1, version = version + 1 WHERE id IN (SELECT user_id FROM sys_user_role WHERE role_id = #{roleId})")
+    @Update("UPDATE sys_user SET token_version = token_version + 1, version = version + 1 WHERE id IN (SELECT user_id FROM sys_user_role WHERE role_id = #{roleId}) AND deleted = 0")
     int bumpTokenVersionByRole(Long roleId);
 }
