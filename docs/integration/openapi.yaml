@@ -1,5 +1,5 @@
 # ERP ↔ MES M2 集成契约（唯一事实来源，仅契约，无实现）。
-# 来源：MES 提案 Akarin7784/smart-manufacturing-cloud#86（docs/api/erp-integration-openapi.yaml @ 25670ca），
+# 来源：MES 提案 Akarin7784/smart-manufacturing-cloud#86（docs/api/erp-integration-openapi.yaml @ 4d88a0c），
 # 按 PM 定稿覆盖冲突项（见 README.md §0）。改动须走 PR，由 PM 审查。
 openapi: 3.1.0
 info:
@@ -39,7 +39,8 @@ paths:
       operationId: postMaterialIssue
       summary: 领料回传（MES→ERP）
       description: |
-        触发：工单下达（派工）后，MES 按领料单完成发料时回传；ERP 生成生产领料出库单并扣减库存。
+        触发：**报工倒冲回传**——MES 报工成功后立即回传本次报工倒冲的物料，一次报工一笔；ERP 生成生产领料出库单并扣减库存。
+        `operationNo` + `reportId` 追溯到工序 / 报工记录（MES #86 OQ-CB-4）。冲销报工的反向单据另议。
         退料（#72）须在工单 COMPLETED 之前，走后续契约（不在 M2 范围）。
         需要 scope `erp:integration:material-issue`。幂等见 README §3。
       security:
@@ -53,10 +54,12 @@ paths:
             schema: {$ref: '#/components/schemas/MaterialIssueRequest'}
             examples:
               ok:
-                summary: 领料回传
+                summary: 报工倒冲领料回传
                 value:
-                  requestNo: MI-WO-20261014-0001-001
+                  requestNo: MI-WO-20261014-0001-OP10-R0001
                   workOrderNo: WO-20261014-0001
+                  operationNo: OP10
+                  reportId: R0001
                   erpProductionOrderNo: MO-20261014-0001
                   warehouseCode: W01
                   occurredAt: "2026-10-14T16:00:00+08:00"
@@ -74,7 +77,7 @@ paths:
               schema: {$ref: '#/components/schemas/RCallbackAck'}
               examples:
                 created:
-                  value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-001, erpDocumentNo: MI-20261014-0088, replayed: false, acceptedAt: "2026-10-14T16:00:01+08:00"}}
+                  value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-OP10-R0001, erpDocumentNo: MI-20261014-0088, replayed: false, acceptedAt: "2026-10-14T16:00:01+08:00"}}
         '200':
           $ref: '#/components/responses/Replayed'
         '400': {$ref: '#/components/responses/BadRequest'}
@@ -114,7 +117,7 @@ paths:
             examples:
               ok:
                 value:
-                  requestNo: FGR-WO-20261014-0001-001
+                  requestNo: FGR-WO-20261014-0001
                   workOrderNo: WO-20261014-0001
                   erpProductionOrderNo: MO-20261014-0001
                   productCode: FG-PUMP-01
@@ -131,7 +134,7 @@ paths:
               schema: {$ref: '#/components/schemas/RCallbackAck'}
               examples:
                 created:
-                  value: {code: 0, msg: ok, data: {requestNo: FGR-WO-20261014-0001-001, erpDocumentNo: FG-20261021-0012, replayed: false, acceptedAt: "2026-10-21T18:00:02+08:00"}}
+                  value: {code: 0, msg: ok, data: {requestNo: FGR-WO-20261014-0001, erpDocumentNo: FG-20261021-0012, replayed: false, acceptedAt: "2026-10-21T18:00:02+08:00"}}
         '200': {$ref: '#/components/responses/Replayed'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -170,7 +173,7 @@ paths:
             examples:
               ok:
                 value:
-                  requestNo: SCR-WO-20261014-0001-OP20-001
+                  requestNo: SCR-WO-20261014-0001-OP20-R0002
                   workOrderNo: WO-20261014-0001
                   erpProductionOrderNo: MO-20261014-0001
                   materialCode: FG-PUMP-01
@@ -188,7 +191,7 @@ paths:
               schema: {$ref: '#/components/schemas/RCallbackAck'}
               examples:
                 created:
-                  value: {code: 0, msg: ok, data: {requestNo: SCR-WO-20261014-0001-OP20-001, erpDocumentNo: SC-20261020-0003, replayed: false, acceptedAt: "2026-10-20T11:30:01+08:00"}}
+                  value: {code: 0, msg: ok, data: {requestNo: SCR-WO-20261014-0001-OP20-R0002, erpDocumentNo: SC-20261020-0003, replayed: false, acceptedAt: "2026-10-20T11:30:01+08:00"}}
         '200': {$ref: '#/components/responses/Replayed'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
@@ -302,7 +305,7 @@ components:
         回调方向：**必须等于 body.requestNo**；请求头缺失、body.requestNo 缺失或两者不一致 → 400（code 400）。
         去重范围 = (服务身份 sub, requestNo)，保留 ≥ 90 天；不复用用户维度 24h 幂等表。
       schema: {type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$'}
-      example: MI-WO-20261014-0001-001
+      example: MI-WO-20261014-0001-OP10-R0001
 
   responses:
     Replayed:
@@ -315,7 +318,7 @@ components:
           schema: {$ref: '#/components/schemas/RCallbackAck'}
           examples:
             replay:
-              value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-001, erpDocumentNo: MI-20261014-0088, replayed: true, acceptedAt: "2026-10-14T16:00:01+08:00"}}
+              value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-OP10-R0001, erpDocumentNo: MI-20261014-0088, replayed: true, acceptedAt: "2026-10-14T16:00:01+08:00"}}
     BadRequest:
       description: 校验失败或幂等键与 requestNo 不一致。不重试。
       content:
@@ -334,6 +337,9 @@ components:
             requestNoMissing:
               summary: body 缺 requestNo
               value: {code: 400, msg: "requestNo: 不能为空"}
+            unknownReason:
+              summary: 报废 reasonCode 不在 ERP 报废原因字典（仅 scraps）
+              value: {code: 400, msg: "reasonCode: 报废原因 XYZ 不存在"}
             tooManyDecimals:
               summary: 数量超过 6 位小数（不四舍五入，直接拒绝）
               value: {code: 400, msg: "quantity: 最多 6 位小数"}
@@ -434,11 +440,13 @@ components:
         lotNo: {type: [string, 'null'], maxLength: 64}
     MaterialIssueRequest:
       type: object
-      required: [requestNo, workOrderNo, erpProductionOrderNo, warehouseCode, occurredAt, lines]
+      required: [requestNo, workOrderNo, erpProductionOrderNo, operationNo, reportId, warehouseCode, occurredAt, lines]
       properties:
-        requestNo: {type: string, maxLength: 64, description: '幂等请求号，规则 MI-{工单号}-{序号}；= Idempotency-Key。'}
+        requestNo: {type: string, maxLength: 64, description: '幂等请求号，规则 MI-{工单号}-{工序}-{报工ID}；= Idempotency-Key。'}
         workOrderNo: {type: string, maxLength: 64}
         erpProductionOrderNo: {type: string, maxLength: 64}
+        operationNo: {type: string, maxLength: 16, description: 倒冲来源工序。}
+        reportId: {type: string, maxLength: 64, description: 倒冲来源报工记录 ID（MES）。}
         warehouseCode: {type: string, maxLength: 32}
         occurredAt: {type: string, format: date-time}
         lines: {type: array, minItems: 1, items: {$ref: '#/components/schemas/MaterialIssueLine'}}
@@ -446,7 +454,7 @@ components:
       type: object
       required: [requestNo, workOrderNo, erpProductionOrderNo, productCode, quantity, uom, warehouseCode, occurredAt]
       properties:
-        requestNo: {type: string, maxLength: 64, description: 'FGR-{工单号}-{序号}'}
+        requestNo: {type: string, maxLength: 64, description: 'FGR-{工单号}（每工单一笔，COMPLETED 时）'}
         workOrderNo: {type: string, maxLength: 64}
         erpProductionOrderNo: {type: string, maxLength: 64}
         productCode: {type: string, maxLength: 128}
@@ -459,14 +467,14 @@ components:
       type: object
       required: [requestNo, workOrderNo, erpProductionOrderNo, materialCode, quantity, uom, warehouseCode, reasonCode, occurredAt]
       properties:
-        requestNo: {type: string, maxLength: 64, description: 'SCR-{工单号}-{工序}-{序号}'}
+        requestNo: {type: string, maxLength: 64, description: 'SCR-{工单号}-{工序}-{报工ID或NCR号}'}
         workOrderNo: {type: string, maxLength: 64}
         erpProductionOrderNo: {type: string, maxLength: 64}
         materialCode: {type: string, maxLength: 128}
         quantity: {$ref: '#/components/schemas/Decimal6'}
         uom: {type: string, maxLength: 16}
         warehouseCode: {type: string, maxLength: 32, description: '报废出库仓（MES PR 86 无此字段，ERP 定稿新增）。'}
-        reasonCode: {type: string, maxLength: 32, enum: [PROCESS_DEFECT, MATERIAL_DEFECT, EQUIPMENT, OTHER]}
+        reasonCode: {type: string, maxLength: 32, description: '报废原因码，按 ERP 报废原因字典（SCRAP_REASON）校验，不在字典 → 400 / 400。契约不写死枚举。'}
         operationNo: {type: [string, 'null'], maxLength: 16}
         occurredAt: {type: string, format: date-time}
     DispatchProductionOrderRequest:

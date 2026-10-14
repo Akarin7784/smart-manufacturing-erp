@@ -6,7 +6,7 @@
 | code | HTTP | problem type | 含义 | MES 处理 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 0 | 201 / 200 | — | 首次受理 / 幂等重放 | 完成 | 已有 |
-| 400 | 400 | `validation-error` | 字段校验失败、引用不存在、uom 不符、`quantity` 超 6 位小数（不舍入）、`Idempotency-Key` 或 `requestNo` 缺失、两者不一致 | 不重试，转人工 | 已有（BAD_REQUEST） |
+| 400 | 400 | `validation-error` | 字段校验失败、引用不存在、uom 不符、报废 `reasonCode` 不在字典、领料缺 `operationNo`/`reportId`、`quantity` 超 6 位小数（不舍入）、`Idempotency-Key` 或 `requestNo` 缺失、两者不一致 | 不重试，转人工 | 已有（BAD_REQUEST） |
 | 401 | 401 | `authentication-required` | 令牌缺失 / 无效 / 过期 / `aud` 不符 | 刷新令牌后重试 1 次 | 已有 |
 | 403 | 403 | `access-denied` | scope 不符；用户 JWT 调回调接口；服务令牌调普通业务接口 | 不重试 | 已有（FORBIDDEN） |
 | 40900 | 409 | `concurrent-modification` | 并发冲突，内部重试用尽 | 退避重试 | 已有 |

@@ -9,7 +9,7 @@
 | [`error-codes.md`](error-codes.md) | 数字码 ↔ problem type ↔ 含义 ↔ 重试策略 |
 
 来源：MES 提案 [smart-manufacturing-cloud#86](https://github.com/Akarin7784/smart-manufacturing-cloud/pull/86)
-（`docs/api/erp-integration-openapi.yaml`、`docs/erp-mes-integration-design.md`，head `25670ca`）。
+（`docs/api/erp-integration-openapi.yaml`、`docs/erp-mes-integration-design.md`，head `4d88a0c`）。
 路径和字段沿用该提案，与下面 PM 定稿冲突处以本目录为准。
 
 ## 0. PM 定稿（覆盖 MES 提案）
@@ -21,16 +21,16 @@
 5. 错误体过渡期保持 `R{code,msg,data}`，给出数字码对照表（`error-codes.md`）。
 6. 回调请求头 `Idempotency-Key` 必须等于 body `requestNo`；按服务身份去重；保留 ≥ 90 天。
 7. 完工入库在工单 **COMPLETED** 时触发（不是 CLOSED）。
-8. 领料在下达/领料单之后；报废在工序上即时回传；退料须在完工前。
+8. 领料为报工倒冲回传（报工成功后立即，一次报工一笔）；报废在工序上即时回传；退料须在完工前。
 
 ## 1. 接口一览
 
 | 方向 | 接口 | 托管方 | 触发 | 幂等 |
 | --- | --- | --- | --- | --- |
 | ERP→MES | `POST /api/integration/erp/work-orders/dispatch` | MES | ERP 生产订单审批通过 | `Idempotency-Key` = `erpProductionOrderNo` |
-| MES→ERP | `POST /api/integration/mes/material-issues` | ERP | 下达后按领料单发料 | `requestNo`（`MI-{工单号}-{序号}`） |
-| MES→ERP | `POST /api/integration/mes/finished-goods-receipts` | ERP | 工单 COMPLETED | `requestNo`（`FGR-{工单号}-{序号}`） |
-| MES→ERP | `POST /api/integration/mes/scraps` | ERP | 工序报废即时 | `requestNo`（`SCR-{工单号}-{工序}-{序号}`） |
+| MES→ERP | `POST /api/integration/mes/material-issues` | ERP | 报工倒冲回传（报工成功后立即） | `requestNo`（`MI-{工单号}-{工序}-{报工ID}`） |
+| MES→ERP | `POST /api/integration/mes/finished-goods-receipts` | ERP | 工单 COMPLETED | `requestNo`（`FGR-{工单号}`，每工单一笔） |
+| MES→ERP | `POST /api/integration/mes/scraps` | ERP | 工序报废即时 | `requestNo`（`SCR-{工单号}-{工序}-{报工ID或NCR号}`） |
 
 回调成功：首次 **201**；重放 **200** + 响应头 `Idempotent-Replayed: true` + `data.replayed=true`，`erpDocumentNo` 与 `acceptedAt` 与首次相同。
 
@@ -65,7 +65,7 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 
 ## 4. 触发时机与业务语义
 
-- **领料**：MES 工单下达（派工）后，按领料单实际发料时回传，ERP 生成生产领料出库单并扣库存。一张领料单可多次回传（序号递增）。
+- **领料（报工倒冲回传）**：MES 报工成功后立即回传本次报工倒冲的物料，一次报工一笔；必填 `operationNo`、`reportId` 追溯到工序 / 报工。ERP 生成生产领料出库单并扣库存。冲销报工的反向单据另议。
 - **完工入库**：工单进入 **COMPLETED** 时回传合格品数量；ERP 生成完工入库单。CLOSED 不触发。
 - **报废**：在工序上报废时即时回传，一次报废一笔；ERP 生成报废出库单。
 - **退料**（MES #72）：必须在工单 COMPLETED 之前完成；退料接口不在 M2 范围，后续另加契约。
@@ -84,7 +84,9 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | `warehouseCode` | 透传 | 仓库编码 | 完工入库默认取下达时的仓；报废需显式传（ERP 定稿新增） |
 | `deviceId` | 可选 | **不传** | 设备由 MES 下达后分配 |
 | `occurredAt` | 发生时间 | 单据业务日期 | ISO-8601 带时区；ERP 单据日期按北京时间换算 |
-| `reasonCode` | 报废原因 | 枚举 | `PROCESS_DEFECT / MATERIAL_DEFECT / EQUIPMENT / OTHER` |
+| `reasonCode` | 报废原因 | 报废原因字典 `SCRAP_REASON` | 字符串，按 ERP 字典校验，不在字典 → 400 / 400；契约不写死枚举。字典在 ERP 主数据维护（实现 PR 新增，初始值 PROCESS_DEFECT / MATERIAL_DEFECT / EQUIPMENT / OTHER），MES 同步该字典 |
+| `operationNo` / `reportId` | 报工工序 / 报工记录 ID | 领料单追溯字段 | 仅领料，必填 |
+| `warehouseCode`（报废） | 透传 | 仓库编码 | 报废必填 |
 
 ## 6. 错误
 
@@ -105,7 +107,7 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | OQ-MAP-1 | ERP 不传 `deviceId`，MES 改为可选 |
 | OQ-MAP-2 | 6 位小数字符串 |
 | OQ-MAP-3 | 物料、仓库编码两边一致；`uom` 须与物料主单位一致 |
-| OQ-FLOW-1 | 领料在下达/领料单后；完工入库在 COMPLETED；报废即时；退料在完工前 |
+| OQ-FLOW-1 | 领料为报工倒冲回传；完工入库在 COMPLETED；报废即时；退料在完工前 |
 
 ## 8. 边界用例（QA Mock）
 
@@ -127,6 +129,8 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | B14 | 完工入库时工单未 COMPLETED | 409 / 40903 |
 | B15 | 取号繁忙后同 `requestNo` 重试 | 先 503 / 50301，重试 201，只建一张单 |
 | B16 | 同 `(sub, requestNo)` 89 天后重发 | 仍按重放返回 200 |
+| B17 | 报废 `reasonCode` 不在 `SCRAP_REASON` 字典 | 400 / 400，不落库 |
+| B18 | 领料缺 `operationNo` 或 `reportId` | 400 / 400 |
 
 ## 9. 测试约定（Mock）
 
