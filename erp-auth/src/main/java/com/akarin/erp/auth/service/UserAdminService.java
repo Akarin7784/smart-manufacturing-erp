@@ -11,7 +11,9 @@ import com.akarin.erp.auth.mapper.SysUserRoleMapper;
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.common.util.SecurityUtils;
+import com.akarin.erp.common.util.Versions;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -75,10 +77,14 @@ public class UserAdminService {
 
     @Transactional
     public void resetPassword(Long id, String password) {
-        SysUser u = require(id);
-        u.setPassword(encoder.encode(password));
-        userMapper.updateById(u);
-        userMapper.bumpTokenVersion(id);
+        require(id);
+        // 有意绕过乐观锁：改密是安全操作，不应因为别人刚改过姓名（version 变了）而失败。
+        // 只定向更新 password，并同时递增 token_version（旧 token 立即失效）和 updated_at；不带 version 条件，也不改 version。
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id)
+                .set(SysUser::getPassword, encoder.encode(password))
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("token_version = token_version + 1")));
     }
 
     @Transactional
@@ -88,9 +94,13 @@ public class UserAdminService {
             if (isSelf(u)) throw new BizException("不能停用当前登录用户");
             guardLastAdmin(u, "停用");
         }
-        u.setStatus(enabled ? SysUser.ENABLED : SysUser.DISABLED);
-        userMapper.updateById(u);
-        userMapper.bumpTokenVersion(id);
+        // 有意绕过乐观锁：启用 / 停用是安全操作，不应因为别人刚改过姓名而失败或静默不生效。
+        // 只定向更新 status，同时递增 token_version（停用后旧 token 立即失效）和 updated_at。
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id)
+                .set(SysUser::getStatus, enabled ? SysUser.ENABLED : SysUser.DISABLED)
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("token_version = token_version + 1")));
         return view(require(id));
     }
 
@@ -98,7 +108,7 @@ public class UserAdminService {
     public UserView assignRoles(Long id, List<Long> roleIds) {
         SysUser u = require(id);
         replaceRoles(u, roleIds);
-        userMapper.bumpTokenVersion(id);
+        Versions.requireOneRow(userMapper.bumpTokenVersion(id));   // 定向 SQL，不受乐观锁影响
         return view(require(id));
     }
 
@@ -108,8 +118,8 @@ public class UserAdminService {
         if (isSelf(u)) throw new BizException("不能删除当前登录用户");
         guardLastAdmin(u, "删除");
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
-        userMapper.bumpTokenVersion(id);
-        userMapper.deleteById(id);
+        Versions.requireOneRow(userMapper.bumpTokenVersion(id));
+        Versions.requireOneRow(userMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     private void replaceRoles(SysUser u, List<Long> roleIds) {

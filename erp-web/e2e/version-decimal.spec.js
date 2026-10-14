@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { api, expectCode, apiLogin, uiLogin, uniq } from './helpers.js'
+import { api, expectCode, apiLogin, uiLogin, uniq, makeFixture } from './helpers.js'
 
 // PR #9：乐观锁 version + 金额/数量/单价以字符串返回 + 溢出 400。
 // 只断言 HTTP 状态 + body.code，不断言提示文案。
@@ -31,6 +31,7 @@ test.describe('乐观锁 version（API）', () => {
       expect(d.body.data.version).toBe(0)
       const l = await api(request, 'GET', `/api/mdm/${m.res}?keyword=${code}`, { token })
       expectCode(l, 200, 0)
+      expect(l.body.data.records).toHaveLength(1)
       expect(l.body.data.records[0].version).toBe(0)
 
       const ok = await api(request, 'PUT', `/api/mdm/${m.res}/${row.id}`, { token, data: { code, name: 'v1', version: 0 } })
@@ -50,7 +51,8 @@ test.describe('乐观锁 version（API）', () => {
     expectCode(role, 200, 0)
     const rid = role.body.data.id
     const rc = role.body.data.code
-    const rv = role.body.data.version ?? 0
+    expect(role.body.data.version).toBe(0)
+    const rv = role.body.data.version
     const r1 = await api(request, 'PUT', `/api/sys/roles/${rid}`, { token, data: { code: rc, name: 'r1', version: rv } })
     expectCode(r1, 200, 0)
     expect(r1.body.data.version).toBe(rv + 1)
@@ -60,7 +62,8 @@ test.describe('乐观锁 version（API）', () => {
     const pc = `e2e:v${Date.now()}`
     const perm = await api(request, 'POST', '/api/sys/permissions', { token, data: { code: pc, name: 'p' } })
     expectCode(perm, 200, 0)
-    const pv = perm.body.data.version ?? 0
+    expect(perm.body.data.version).toBe(0)
+    const pv = perm.body.data.version
     expectCode(await api(request, 'PUT', `/api/sys/permissions/${perm.body.data.id}`, { token, data: { code: pc, name: 'p1', version: pv } }), 200, 0)
     expectCode(await api(request, 'PUT', `/api/sys/permissions/${perm.body.data.id}`, { token, data: { code: pc, name: 'p2', version: pv } }), 409, 40900)
     expectCode(await api(request, 'PUT', `/api/sys/permissions/${perm.body.data.id}`, { token, data: { code: pc, name: 'p2' } }), 400, 400)
@@ -70,7 +73,7 @@ test.describe('乐观锁 version（API）', () => {
     const ud = await api(request, 'GET', `/api/sys/users/${u.body.data.id}`, { token })
     expectCode(ud, 200, 0)
     const uv = ud.body.data.version
-    expect(typeof uv).toBe('number')
+    expect(uv).toBe(0)
     const u1 = await api(request, 'PUT', `/api/sys/users/${u.body.data.id}`, { token, data: { realName: 'n1', version: uv } })
     expectCode(u1, 200, 0)
     expectCode(await api(request, 'PUT', `/api/sys/users/${u.body.data.id}`, { token, data: { realName: 'n2', version: uv } }), 409, 40900)
@@ -78,8 +81,46 @@ test.describe('乐观锁 version（API）', () => {
   })
 })
 
+test.describe('安全回归：改名提升 version 后停用 / 重置密码仍生效（API）', () => {
+  // 预期在小钱修复 setEnabled / resetPassword 忽略 0 行更新之前为红
+  test('改名 → 停用：登录失败、旧 token 失效；启用 → 改名 → 重置密码：新密码可登录、旧密码失败', async ({ request }) => {
+    const admin = await apiLogin(request, ADMIN.u, ADMIN.p)
+    const username = `e2e_sec_${Date.now()}`
+    const created = await api(request, 'POST', '/api/sys/users', { token: admin, data: { username, password: 'oldpass1' } })
+    expectCode(created, 200, 0)
+    const id = created.body.data.id
+    const login = (password) => api(request, 'POST', '/api/auth/login', { data: { username, password } })
+    const l1 = await login('oldpass1')
+    expectCode(l1, 200, 0)
+    const userToken = l1.body.data.token
+    expectCode(await api(request, 'GET', '/api/auth/me', { token: userToken }), 200, 0)
+
+    const d0 = await api(request, 'GET', `/api/sys/users/${id}`, { token: admin })
+    expectCode(d0, 200, 0)
+    expect(d0.body.data.version).toBe(0)
+    const r1 = await api(request, 'PUT', `/api/sys/users/${id}`, { token: admin, data: { realName: 'n1', version: d0.body.data.version } })
+    expectCode(r1, 200, 0)
+    expect(r1.body.data.version).toBe(1)
+
+    expectCode(await api(request, 'PUT', `/api/sys/users/${id}/status`, { token: admin, data: { enabled: false } }), 200, 0)
+    const dis = await api(request, 'GET', `/api/sys/users/${id}`, { token: admin })
+    expect(dis.body.data.enabled).toBe(false)
+    expectCode(await login('oldpass1'), 403, 403)
+    expectCode(await api(request, 'GET', '/api/auth/me', { token: userToken }), 401, 401)
+
+    expectCode(await api(request, 'PUT', `/api/sys/users/${id}/status`, { token: admin, data: { enabled: true } }), 200, 0)
+    const d2 = await api(request, 'GET', `/api/sys/users/${id}`, { token: admin })
+    expectCode(d2, 200, 0)
+    expect(d2.body.data.enabled).toBe(true)
+    expectCode(await api(request, 'PUT', `/api/sys/users/${id}`, { token: admin, data: { realName: 'n2', version: d2.body.data.version } }), 200, 0)
+    expectCode(await api(request, 'PUT', `/api/sys/users/${id}/password`, { token: admin, data: { password: 'newpass2' } }), 200, 0)
+    expectCode(await login('newpass2'), 200, 0)
+    expectCode(await login('oldpass1'), 401, 401)
+  })
+})
+
 test.describe('乐观锁真实冲突（两个浏览器上下文）', () => {
-  for (const m of MDM.slice(0, 2)) {
+  for (const m of MDM) {
     test(`${m.res}：A 先保存 200/0，B 再保存 409/40900，B 的列表刷新一次显示 A 的值，只有一条提示`, async ({ browser, request }) => {
       const token = await apiLogin(request, ADMIN.u, ADMIN.p)
       const code = uniq('CF-')
@@ -133,12 +174,13 @@ test.describe('金额 / 数量 / 单价以字符串返回（API）', () => {
 
   test('收付款：字符串和数字入参都能精确回读字符串；"abc" → 400/400', async ({ request }) => {
     const token = await apiLogin(request, ADMIN.u, ADMIN.p)
-    const s = await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: 1, amount: BIG } })
+    const f = await makeFixture(request, token)
+    const s = await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: f.supplierId, amount: BIG } })
     expectCode(s, 200, 0)
     expect(typeof s.body.data.amount).toBe('string')
     expect(s.body.data.amount).toBe(BIG)
     expect(typeof s.body.data.appliedAmount).toBe('string')
-    const n = await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: 1, amount: 12.5 } })
+    const n = await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: f.supplierId, amount: 12.5 } })
     expectCode(n, 200, 0)
     expect(n.body.data.amount).toBe('12.50')
     const list = await api(request, 'GET', '/api/finance/payments?size=100', { token })
@@ -149,13 +191,14 @@ test.describe('金额 / 数量 / 单价以字符串返回（API）', () => {
       expect(typeof r.amount).toBe('string')
       expect(typeof r.appliedAmount).toBe('string')
     }
-    expectCode(await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: 1, amount: 'abc' } }), 400, 400)
+    expectCode(await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'PAYMENT', partnerId: f.supplierId, amount: 'abc' } }), 400, 400)
   })
 
   test('采购单行：qty / price / amount / totalAmount 都是字符串，详情和列表一致；"abc" → 400/400', async ({ request }) => {
     const token = await apiLogin(request, ADMIN.u, ADMIN.p)
+    const f = await makeFixture(request, token)
     const c = await api(request, 'POST', '/api/purchase/orders', {
-      token, data: { supplierId: 1, warehouseId: 1, items: [{ materialId: 1, qty: '2.5', price: '3.333' }, { materialId: 2, qty: 3, price: 1.1 }] }
+      token, data: { supplierId: f.supplierId, warehouseId: f.warehouseId, items: [{ materialId: f.materialId, qty: '2.5', price: '3.333' }, { materialId: f.material2Id, qty: 3, price: 1.1 }] }
     })
     expectCode(c, 200, 0)
     const { order, items } = c.body.data
@@ -171,18 +214,19 @@ test.describe('金额 / 数量 / 单价以字符串返回（API）', () => {
     const l = await api(request, 'GET', '/api/purchase/orders?size=100', { token })
     expect(l.body.data.records.find((r) => r.id === order.id).totalAmount).toBe('11.63')
     expectCode(await api(request, 'POST', '/api/purchase/orders', {
-      token, data: { supplierId: 1, warehouseId: 1, items: [{ materialId: 1, qty: 'abc', price: 1 }] }
+      token, data: { supplierId: f.supplierId, warehouseId: f.warehouseId, items: [{ materialId: f.materialId, qty: 'abc', price: 1 }] }
     }), 400, 400)
     expectCode(await api(request, 'POST', '/api/purchase/orders', {
-      token, data: { supplierId: 1, warehouseId: 1, items: [{ materialId: 1, qty: 1, price: 'abc' }] }
+      token, data: { supplierId: f.supplierId, warehouseId: f.warehouseId, items: [{ materialId: f.materialId, qty: 1, price: 'abc' }] }
     }), 400, 400)
   })
 
   test('行金额溢出（99999999999999 × 99999999999999）→ 400/400，不是 500', async ({ request }) => {
     const token = await apiLogin(request, ADMIN.u, ADMIN.p)
+    const f = await makeFixture(request, token)
     for (const v of [99999999999999, '99999999999999']) {
       expectCode(await api(request, 'POST', '/api/purchase/orders', {
-        token, data: { supplierId: 1, warehouseId: 1, items: [{ materialId: 1, qty: v, price: v }] }
+        token, data: { supplierId: f.supplierId, warehouseId: f.warehouseId, items: [{ materialId: f.materialId, qty: v, price: v }] }
       }), 400, 400)
     }
   })
