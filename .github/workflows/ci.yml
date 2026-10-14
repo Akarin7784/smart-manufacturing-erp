@@ -133,7 +133,7 @@ jobs:
           demo=$(curl -s "http://localhost:8080/api/mdm/materials?keyword=DM-" -H "Authorization: Bearer $token")
           echo "$demo" | head -c 200; echo
           echo "$demo" | grep -q '"total":0'
-      - name: MySQL integration tests (@Tag mysql, deterministic edit-vs-submit race)
+      - name: MySQL integration tests (@Tag mysql: edit-vs-submit race, first stock-in race)
         env:
           MYSQL_HOST: 127.0.0.1
           MYSQL_PORT: '3306'
@@ -144,6 +144,7 @@ jobs:
           mvn -B -Pmysql-it -pl erp-boot -am test
           # 防止 tag 过滤失误导致 0 条用例也“通过”
           grep -q 'tests="2"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.OrderEditSubmitRaceMySqlTest.xml
+          grep -q 'tests="1"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.FirstInsertRaceMySqlTest.xml
       - name: App log
         if: always()
         run: tail -n 200 app.log || true

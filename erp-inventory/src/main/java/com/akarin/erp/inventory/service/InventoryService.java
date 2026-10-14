@@ -2,6 +2,7 @@ package com.akarin.erp.inventory.service;
 
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.util.NoGenerator;
+import com.akarin.erp.common.util.Versions;
 import com.akarin.erp.inventory.entity.Stock;
 import com.akarin.erp.inventory.entity.StockTxn;
 import com.akarin.erp.inventory.mapper.StockMapper;
@@ -18,7 +19,6 @@ import java.math.BigDecimal;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
-    private static final int MAX_RETRY = 3;
     private final StockMapper stockMapper;
     private final StockTxnMapper txnMapper;
     private final MaterialService materialService;
@@ -39,34 +39,26 @@ public class InventoryService {
         if (qty == null || qty.signum() <= 0) throw new BizException("数量必须大于 0");
         materialService.requireRef(materialId);
         warehouseService.requireRef(warehouseId);
-        for (int i = 0; i < MAX_RETRY; i++) {
-            // 重试时必须加锁当前读：MySQL REPEATABLE READ 下普通 SELECT 仍读本事务快照里的旧 version，重试永远 0 行
-            Stock s = stockMapper.selectOne(new LambdaQueryWrapper<Stock>()
-                    .eq(Stock::getMaterialId, materialId).eq(Stock::getWarehouseId, warehouseId)
-                    .last(i > 0, "FOR UPDATE"));
-            if (s == null) {
-                if ("OUT".equals(dir)) throw new BizException("库存不足");
-                s = new Stock();
-                s.setMaterialId(materialId); s.setWarehouseId(warehouseId);
-                s.setQty(BigDecimal.ZERO); s.setVersion(0);
-                stockMapper.insert(s);
-            }
-            BigDecimal after = "IN".equals(dir) ? s.getQty().add(qty) : s.getQty().subtract(qty);
-            if (after.signum() < 0) throw new BizException("库存不足，当前可用: " + s.getQty());
-            String over = com.akarin.erp.common.util.Money.scaleError(after, 14, 4, "入库后库存数量");
-            if (over != null) throw new BizException(over + "，超出数量上限");
-            s.setQty(after);
-            if (stockMapper.updateById(s) == 1) {
-                StockTxn t = new StockTxn();
-                t.setTxnNo(NoGenerator.next("IN".equals(dir) ? "SI" : "SO"));
-                t.setDirection(dir); t.setMaterialId(materialId); t.setWarehouseId(warehouseId);
-                t.setQty(qty); t.setBalanceAfter(after);
-                t.setBizType(bizType == null ? "MANUAL" : bizType); t.setBizNo(bizNo); t.setRemark(remark);
-                txnMapper.insert(t);
-                return t;
-            }
-            // 版本冲突，重读后重试
-        }
-        throw new BizException("库存并发冲突，请重试");
+        // 入库：先保证库存行存在（幂等 upsert，首次并发收货不再撞唯一键）；出库：没有行即库存不足
+        if ("IN".equals(dir)) stockMapper.ensureRow(materialId, warehouseId);
+        // 加锁当前读：同一 (物料, 仓库) 的并发收发在这里串行化，读到最新已提交数量（MySQL RR 下不受快照影响）
+        Stock s = stockMapper.selectOne(new LambdaQueryWrapper<Stock>()
+                .eq(Stock::getMaterialId, materialId).eq(Stock::getWarehouseId, warehouseId)
+                .last("FOR UPDATE"));
+        if (s == null) throw new BizException("库存不足");
+        BigDecimal after = "IN".equals(dir) ? s.getQty().add(qty) : s.getQty().subtract(qty);
+        if (after.signum() < 0) throw new BizException("库存不足，当前可用: " + s.getQty());
+        String over = com.akarin.erp.common.util.Money.scaleError(after, 14, 4, "入库后库存数量");
+        if (over != null) throw new BizException(over + "，超出数量上限");
+        s.setQty(after);
+        // 行已加锁，version 不会被别人改；仍按乐观锁写并要求恰好 1 行，防御性兜底
+        Versions.requireOneRow(stockMapper.updateById(s));
+        StockTxn t = new StockTxn();
+        t.setTxnNo(NoGenerator.next("IN".equals(dir) ? "SI" : "SO"));
+        t.setDirection(dir); t.setMaterialId(materialId); t.setWarehouseId(warehouseId);
+        t.setQty(qty); t.setBalanceAfter(after);
+        t.setBizType(bizType == null ? "MANUAL" : bizType); t.setBizNo(bizNo); t.setRemark(remark);
+        txnMapper.insert(t);
+        return t;
     }
 }
