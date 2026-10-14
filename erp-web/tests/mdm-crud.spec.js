@@ -121,10 +121,10 @@ describe('业务错误（页面不再重复提示）', () => {
 
 describe('编辑 PUT 携带原编码（四类主数据）', () => {
   it.each([
-    ['materials', { id: 1, code: 'M001', name: '物料', spec: 's', unit: 'u', category: 'c', status: 1 }],
-    ['customers', { id: 2, code: 'C001', name: '客户', contact: '张三', phone: '138', status: 1 }],
-    ['suppliers', { id: 3, code: 'S001', name: '供应商', contact: '李四', phone: '139', status: 1 }],
-    ['warehouses', { id: 4, code: 'W001', name: '仓库', address: '浦东', status: 1 }]
+    ['materials', { id: 1, code: 'M001', name: '物料', spec: 's', unit: 'u', category: 'c', status: 1, version: 3 }],
+    ['customers', { id: 2, code: 'C001', name: '客户', contact: '张三', phone: '138', status: 1, version: 0 }],
+    ['suppliers', { id: 3, code: 'S001', name: '供应商', contact: '李四', phone: '139', status: 1, version: 5 }],
+    ['warehouses', { id: 4, code: 'W001', name: '仓库', address: '浦东', status: 1, version: 1 }]
   ])('%s：code 原样提交，即使表单值被篡改', async (resource, row) => {
     updateMdm.mockImplementation(ok)
     const w = mount(MdmFormDialog, { props: { modelValue: true, resource, row }, global: { plugins: [setup()] }, attachTo: document.body })
@@ -138,6 +138,7 @@ describe('编辑 PUT 携带原编码（四类主数据）', () => {
     expect(body.code).toBe(row.code)
     expect(body.name).toBe(row.name + '-改')
     expect(body.status).toBe(0)
+    expect(body.version).toBe(row.version)
   })
 })
 
@@ -168,6 +169,7 @@ describe('MdmFormDialog', () => {
     Object.assign(w.vm.form, { code: ' M100 ', name: '垫片', spec: '', status: 0 })
     await w.vm.onSave(); await flushPromises()
     expect(createMdm).toHaveBeenCalledWith('materials', { code: 'M100', name: '垫片', spec: null, unit: null, category: null, status: 0 })
+    expect(createMdm.mock.calls.at(-1)[1]).not.toHaveProperty('version')
     expect(w.emitted('update:modelValue').at(-1)).toEqual([false])
     expect(w.emitted('saved')).toBeTruthy()
   })
