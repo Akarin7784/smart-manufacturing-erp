@@ -20,6 +20,8 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class SalesOrderController {
     private final SalesOrderService service;
+    /** 最外层整事务重试（仅死锁/锁等待超时）；service 方法本身是 @Transactional，每次重试都是新事务 */
+    private final com.akarin.erp.common.tx.TxRetry txRetry;
 
     @GetMapping
     public R<Page<SalesOrder>> page(@RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "20") long size,
@@ -49,5 +51,5 @@ public class SalesOrderController {
 
     @PostMapping("/{id}/ship")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(service.ship(id)); }
+    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(txRetry.run(() -> service.ship(id))); }
 }
