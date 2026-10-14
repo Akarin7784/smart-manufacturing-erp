@@ -26,6 +26,14 @@ class IdemLeaseMySqlTest extends IdemLeaseSupport {
                 "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='sys_idempotency' AND COLUMN_NAME IN ('owner_token','lease_until')", Integer.class)).isEqualTo(2);
     }
 
+    /** N1：另一实例已加上的列 / 索引（1060 / 1061）忽略，其他 DDL 错误照常抛出 */
+    @Test void schemaUpgradeIgnoresDuplicateColumnAndKey() {
+        upgrade.alter("ALTER TABLE pur_order ADD COLUMN idem_hash CHAR(64)", 1060);
+        upgrade.alter("ALTER TABLE pur_order ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key)", 1061);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> upgrade.alter("ALTER TABLE no_such_table ADD COLUMN x INT", 1060))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+    }
+
     @Test void committedButProcessingReplays() throws Exception { committedButProcessingReplaysAfterLease(); }
     @Test void retryWhileLeaseValid() throws Exception { retryWhileLeaseValidIs40904(); }
     @Test void twoReclaimersOneDoc() throws Exception { twoReclaimersExactlyOneDocument(); }
@@ -33,5 +41,8 @@ class IdemLeaseMySqlTest extends IdemLeaseSupport {
     @Test void crashThenLeaseCreatesOne() throws Exception { crashThenLeaseExpiredCreatesOne(); }
     @Test void slowOriginalAndTakeover() throws Exception { slowOriginalAndTakeoverOneDocument(); }
     @Test void purgedKeyReuse() throws Exception { purgedKeyReusedDifferentParamsIs40902SameParamsReplays(); }
+    @Test void legacyNullHashPurged() throws Exception { legacyNullHashPurgedIs40902OnAllCreateEndpoints(); }
+    @Test void legacyNullHashLeaseExpired() throws Exception { legacyNullHashLeaseExpiredIs40902(); }
+    @Test void successAndReplayStillReplay() throws Exception { successAndReplayKeepRecord(); }
     @Test void multiLineMovements() throws Exception { multiLineMovementsInsideIdemContextDoNotCollide(); }
 }

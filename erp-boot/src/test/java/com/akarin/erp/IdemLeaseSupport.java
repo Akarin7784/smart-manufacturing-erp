@@ -184,7 +184,7 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
                 ps.setLong(1, material); ps.setLong(2, warehouse); ps.executeQuery().close();
             }
             Future<Res> fa = ex.submit(() -> post2(admin, "/api/inventory/in", in, key));
-            Thread.sleep(3300);   // 租期 2s 已过（MySQL DATETIME 精度到秒，多留 1s），A 仍卡着
+            Thread.sleep(4300);   // 租期 2s（库里按秒取整再 +1s = 3s）已过，A 仍卡着
             Map<String, Object> rec = jdbc.queryForMap("SELECT status, owner_token FROM sys_idempotency WHERE idem_key=?", key);
             assertThat(rec.get("status")).as("A 仍在处理").isEqualTo("PROCESSING");
             String tokenA = (String) rec.get("owner_token");
@@ -292,5 +292,70 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         // 确认这些单据确实落了幂等键（字段存在于库里，只是不对外）
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM pur_order WHERE idem_key=?", Integer.class, poKey)).isEqualTo(1);
         for (String o : outs) assertThat(o.toLowerCase()).doesNotContain("idemuser", "idemkey", "idemhash", "idem_user", "idem_key", "idem_hash");
+    }
+
+    int processingLeft(String key) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sys_idempotency WHERE idem_key=? AND status='PROCESSING'", Integer.class, key);
+    }
+
+    /** B1：旧单据 idem_hash 为 NULL，幂等记录已清理 → 5 个创建接口都 409/40902，且不留 PROCESSING */
+    void legacyNullHashPurgedIs40902OnAllCreateEndpoints() throws Exception {
+        setUpRefs();
+        long customer = mdm(admin, "customers", "LC");
+        String tag = uniq("nh");
+        assertThat(post2(admin, "/api/inventory/in", "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"10\"}", null).code()).isZero();
+        String[][] cases = {
+            {"/api/purchase/orders", po(tag), "pur_order"},
+            {"/api/sales/orders", "{\"customerId\":" + customer + ",\"warehouseId\":" + warehouse + ",\"items\":[{\"materialId\":" + material + ",\"qty\":1,\"price\":1}]}", "sal_order"},
+            {"/api/inventory/in", "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"1\"}", "inv_stock_txn"},
+            {"/api/inventory/out", "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"1\"}", "inv_stock_txn"},
+            {"/api/finance/payments", "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + supplier + ",\"amount\":1}", "fin_payment"}};
+        for (int n = 0; n < cases.length; n++) {
+            String url = cases[n][0], body = cases[n][1], table = cases[n][2], key = "nh-" + n + "-" + tag;
+            assertThat(post2(admin, url, body, key).code()).as(url).isZero();
+            int docs = jdbc.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE idem_key=?", Integer.class, key);
+            assertThat(docs).isEqualTo(1);
+            jdbc.update("UPDATE " + table + " SET idem_hash = NULL WHERE idem_key=?", key);   // 旧版本写入的单据
+            jdbc.update("DELETE FROM sys_idempotency WHERE idem_key=?", key);                  // 24h 清理
+            Res r = post2(admin, url, body, key);
+            assertThat(r.status() + "/" + r.code()).as(url).isEqualTo("409/40902");
+            assertThat(processingLeft(key)).as(url + " 不留 PROCESSING").isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table + " WHERE idem_key=?", Integer.class, key)).isEqualTo(1);
+            Res again = post2(admin, url, body, key);   // 再试仍 40902，不会卡成 40904
+            assertThat(again.status() + "/" + again.code()).as(url).isEqualTo("409/40902");
+        }
+    }
+
+    /** B1：租期已过的 PROCESSING + 旧单据 NULL 摘要 → 40902，过期记录被清掉 */
+    void legacyNullHashLeaseExpiredIs40902() throws Exception {
+        setUpRefs();
+        String remark = uniq("nl"), key = "nl-" + remark;
+        assertThat(post2(admin, "/api/purchase/orders", po(remark), key).code()).isZero();
+        jdbc.update("UPDATE pur_order SET idem_hash = NULL WHERE idem_key=?", key);
+        jdbc.update("UPDATE sys_idempotency SET status='PROCESSING', result_id=NULL, owner_token='dead', lease_until=TIMESTAMPADD(SECOND, -30, LOCALTIMESTAMP) WHERE idem_key=?", key);
+        Res r = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(r.status() + "/" + r.code()).isEqualTo("409/40902");
+        assertThat(processingLeft(key)).isZero();
+        assertThat(poCount(remark)).isEqualTo(1);
+    }
+
+    /** 成功与“从单据重放”路径都不释放记录：之后同 key 同参数仍重放同一张单 */
+    void successAndReplayKeepRecord() throws Exception {
+        setUpRefs();
+        String remark = uniq("kp"), key = "kp-" + remark;
+        Res a = post2(admin, "/api/purchase/orders", po(remark), key);
+        long id = a.data().path("order").path("id").asLong();
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_idempotency WHERE idem_key=?", String.class, key)).isEqualTo("DONE");
+        Res b = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(b.data().path("order").path("id").asLong()).isEqualTo(id);
+        // 从单据重放（清理后撞 uk_pur_idem）：重放后记录是 DONE，再来一次还是同一张
+        jdbc.update("DELETE FROM sys_idempotency WHERE idem_key=?", key);
+        Res c = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(c.code()).isZero();
+        assertThat(c.data().path("order").path("id").asLong()).isEqualTo(id);
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_idempotency WHERE idem_key=?", String.class, key)).isEqualTo("DONE");
+        Res d = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(d.data().path("order").path("id").asLong()).isEqualTo(id);
+        assertThat(poCount(remark)).isEqualTo(1);
     }
 }

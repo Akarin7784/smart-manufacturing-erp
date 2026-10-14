@@ -125,7 +125,18 @@ public class IdempotencyService {
             // PROCESSING：租期按数据库时钟判断（多实例 JVM 时钟可能不一致）
             if (r.leaseValid()) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
             // 租期已过：原请求可能崩溃，也可能只是慢。先查单据是否已提交（单据与 (用户, key, 参数摘要) 同事务写入）
-            Long docId = replayableDocument(docTable, user, key, hash);
+            Long docId;
+            try {
+                docId = replayableDocument(docTable, user, key, hash);
+            } catch (RuntimeException ex) {
+                // 不一致（或查单出错）：清掉这条租期已过的 PROCESSING 记录（条件删除，不会删到别人刚接管的），再抛出
+                try {
+                    jdbc.update("DELETE FROM sys_idempotency WHERE id = ? AND status = ? AND lease_until < LOCALTIMESTAMP", r.id(), PROCESSING);
+                } catch (RuntimeException de) {
+                    log.warn("idempotency stale-record cleanup failed: rowId={} exception={}", r.id(), de.getClass().getName());
+                }
+                throw ex;
+            }
             if (docId != null) {
                 jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ? AND status = ?", DONE, docId, r.id(), PROCESSING);
                 log.info("idempotency lease expired, document already committed: rowId={} docId={}", r.id(), docId);
@@ -134,7 +145,7 @@ public class IdempotencyService {
             // 没有单据：条件更新接管（只有一个请求能把过期租期改成新租期）
             String token = java.util.UUID.randomUUID().toString();
             // lease_until 用数据库时钟；旧记录（lease_until 为空）按 created_at（应用写入）+ 租期，在 find 里已算好
-            int taken = jdbc.update("UPDATE sys_idempotency SET owner_token = ?, lease_until = TIMESTAMPADD(SECOND, ?, LOCALTIMESTAMP) "
+            int taken = jdbc.update("UPDATE sys_idempotency SET owner_token = ?, lease_until = TIMESTAMPADD(SECOND, ? + 1, LOCALTIMESTAMP) "
                             + "WHERE id = ? AND status = ? AND (lease_until < LOCALTIMESTAMP OR (lease_until IS NULL AND created_at < ?))",
                     token, lease.getSeconds(), r.id(), PROCESSING, Timestamp.valueOf(now().minus(lease)));
             if (taken == 1) {
@@ -154,9 +165,13 @@ public class IdempotencyService {
         if (!DOC_UNIQUE.containsKey(docTable)) throw new IllegalArgumentException("unknown doc table " + docTable);
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT id, idem_hash FROM " + docTable + " WHERE idem_user = ? AND idem_key = ?", user, key);
         if (rows.isEmpty()) return null;
-        Map<String, Object> row = rows.get(0);
-        Object h = row.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase("idem_hash")).map(Map.Entry::getValue).findFirst().orElse(null);
-        Object id = row.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase("id")).map(Map.Entry::getValue).findFirst().orElseThrow();
+        Object h = null, id = null;
+        // 不能用 stream().map(getValue)：idem_hash 为 NULL（旧单据）时 findFirst 会 NPE
+        for (Map.Entry<String, Object> e : rows.get(0).entrySet()) {
+            if (e.getKey().equalsIgnoreCase("idem_hash")) h = e.getValue();
+            else if (e.getKey().equalsIgnoreCase("id")) id = e.getValue();
+        }
+        // 旧单据没有摘要（NULL）按不一致处理
         if (h == null || !hash.equals(h.toString().trim()))
             throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency-Key 已被使用且参数不一致");
         return ((Number) id).longValue();
@@ -179,32 +194,32 @@ public class IdempotencyService {
     }
 
     private <T> T runClaimed(Claim c, String user, String key, String hash, String docTable, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
-        T result;
+        boolean done = false;   // 只有标成 DONE 后才保留记录；其余任何异常路径都在 finally 里释放占位
         try {
-            result = IdemContext.with(user, key, hash, work);
-        } catch (RuntimeException | Error e) {
-            // 单据上 (idem_user, idem_key) 唯一：慢的原请求与接管者并发时，后提交的一方在这里撞唯一键回滚。
-            // 只有撞的是本单据表的幂等键约束，才去查对方已提交的单据并（参数一致时）重放；其他错误释放占位后照常抛出
-            String constraint = DOC_UNIQUE.get(docTable);
-            if (isIdemUniqueViolation(e, constraint)) {
-                log.warn("idempotency unique violation on {}: rowId={}", constraint, c.rowId());
-                Long docId;
-                try {
-                    docId = replayableDocument(docTable, user, key, hash);
-                } catch (BizException mismatch) {
-                    release(c);
-                    throw mismatch;   // 40902：同 key 的单据参数不同
+            T result;
+            try {
+                result = IdemContext.with(user, key, hash, work);
+            } catch (RuntimeException | Error e) {
+                // 单据上 (idem_user, idem_key) 唯一：慢的原请求与接管者并发时，后提交的一方在这里撞唯一键回滚。
+                // 只有撞的是本单据表的幂等键约束，才去查对方已提交的单据并（参数一致时）重放；其他错误照常抛出
+                String constraint = DOC_UNIQUE.get(docTable);
+                if (isIdemUniqueViolation(e, constraint)) {
+                    log.warn("idempotency unique violation on {}: rowId={}", constraint, c.rowId());
+                    Long docId = replayableDocument(docTable, user, key, hash);   // 不一致 → 40902
+                    if (docId != null) {
+                        markDone(c, docId, true);
+                        done = true;
+                        return load.apply(docId);
+                    }
                 }
-                if (docId != null) {
-                    markDone(c, docId, true);
-                    return load.apply(docId);
-                }
+                throw e;
             }
-            release(c);
-            throw e;
+            markDone(c, idOf.apply(result), false);
+            done = true;
+            return result;
+        } finally {
+            if (!done) release(c);
         }
-        markDone(c, idOf.apply(result), false);
-        return result;
     }
 
     private void markDone(Claim c, long docId, boolean byOther) {
@@ -235,7 +250,7 @@ public class IdempotencyService {
         GeneratedKeyHolder kh = new GeneratedKeyHolder();
         try {
             jdbc.update(c -> {
-                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) VALUES (?, ?, ?, ?, ?, ?, ?, TIMESTAMPADD(SECOND, ?, LOCALTIMESTAMP))",
+                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) VALUES (?, ?, ?, ?, ?, ?, ?, TIMESTAMPADD(SECOND, ? + 1, LOCALTIMESTAMP))",
                         Statement.RETURN_GENERATED_KEYS);
                 ps.setString(1, user); ps.setString(2, key); ps.setString(3, hash); ps.setString(4, PROCESSING);
                 ps.setTimestamp(5, Timestamp.valueOf(now)); ps.setTimestamp(6, Timestamp.valueOf(now.plus(TTL)));

@@ -16,5 +16,8 @@ class IdemLeaseH2Test extends IdemLeaseSupport {
     @Test void slowOriginalAndTakeover() throws Exception { slowOriginalAndTakeoverOneDocument(); }
     @Test void purgedKeyReuse() throws Exception { purgedKeyReusedDifferentParamsIs40902SameParamsReplays(); }
     @Test void idemFieldsHiddenInJson() throws Exception { idemFieldsNotInResponses(); }
+    @Test void legacyNullHashPurged() throws Exception { legacyNullHashPurgedIs40902OnAllCreateEndpoints(); }
+    @Test void legacyNullHashLeaseExpired() throws Exception { legacyNullHashLeaseExpiredIs40902(); }
+    @Test void successAndReplayStillReplay() throws Exception { successAndReplayKeepRecord(); }
     @Test void multiLineMovements() throws Exception { multiLineMovementsInsideIdemContextDoNotCollide(); }
 }

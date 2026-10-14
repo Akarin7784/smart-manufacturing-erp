@@ -40,13 +40,13 @@ class SchemaUpgrade implements SmartInitializingSingleton {
 
     private void addColumn(String table, String col, String type) {
         if (hasColumn(table, col)) return;
-        jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + col + " " + type);
+        alter("ALTER TABLE " + table + " ADD COLUMN " + col + " " + type, 1060);
         log.info("schema upgrade: {}.{} added", table, col);
     }
 
     private void addIndex(String table, String name, String cols) {
         if (hasIndex(table, name)) return;
-        jdbc.execute("ALTER TABLE " + table + " ADD UNIQUE KEY " + name + " " + cols);
+        alter("ALTER TABLE " + table + " ADD UNIQUE KEY " + name + " " + cols, 1061);
         log.info("schema upgrade: {}.{} added", table, name);
     }
 
@@ -62,5 +62,15 @@ class SchemaUpgrade implements SmartInitializingSingleton {
                 "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?",
                 Integer.class, table, name);
         return n != null && n > 0;
+    }
+
+    /** 多实例同时启动时另一实例可能已加上：忽略 MySQL 1060（列已存在）/ 1061（索引已存在），其他错误照常抛出 */
+    void alter(String ddl, int ignorable) {
+        try {
+            jdbc.execute(ddl);
+        } catch (org.springframework.dao.DataAccessException e) {
+            if (!(e.getMostSpecificCause() instanceof java.sql.SQLException se) || se.getErrorCode() != ignorable) throw e;
+            log.info("schema upgrade skipped (already applied by another instance): {}", ddl);
+        }
     }
 }
