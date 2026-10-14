@@ -13,4 +13,6 @@ public class ProcessDef extends BaseEntity {
     private String bizType;
     private String name;
     private Boolean enabled;
+    @com.baomidou.mybatisplus.annotation.Version
+    private Integer version;
 }

@@ -2,6 +2,7 @@ package com.akarin.erp.purchase.controller;
 
 import com.akarin.erp.common.web.R;
 import com.akarin.erp.purchase.dto.PurchaseOrderCreateReq;
+import com.akarin.erp.purchase.dto.PurchaseOrderUpdateReq;
 import com.akarin.erp.purchase.dto.PurchaseOrderDetail;
 import com.akarin.erp.purchase.entity.PurchaseOrder;
 import com.akarin.erp.purchase.service.PurchaseOrderService;
@@ -33,6 +34,12 @@ public class PurchaseOrderController {
     @PostMapping
     @PreAuthorize("hasAuthority('purchase:write')")
     public R<PurchaseOrderDetail> create(@Valid @RequestBody PurchaseOrderCreateReq req) { return R.ok(service.create(req)); }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('purchase:write')")
+    public R<PurchaseOrderDetail> update(@PathVariable Long id, @Valid @RequestBody PurchaseOrderUpdateReq req) {
+        return R.ok(service.update(id, req));
+    }
 
     @PostMapping("/{id}/submit")
     @PreAuthorize("hasAuthority('purchase:write')")

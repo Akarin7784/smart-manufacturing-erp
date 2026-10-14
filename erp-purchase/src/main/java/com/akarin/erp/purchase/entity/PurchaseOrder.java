@@ -17,4 +17,6 @@ public class PurchaseOrder extends BaseEntity {
     private String status;
     private BigDecimal totalAmount;
     private String remark;
+    @com.baomidou.mybatisplus.annotation.Version
+    private Integer version;
 }

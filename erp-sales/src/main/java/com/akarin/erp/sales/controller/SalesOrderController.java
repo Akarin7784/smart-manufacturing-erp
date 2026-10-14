@@ -2,6 +2,7 @@ package com.akarin.erp.sales.controller;
 
 import com.akarin.erp.common.web.R;
 import com.akarin.erp.sales.dto.SalesOrderCreateReq;
+import com.akarin.erp.sales.dto.SalesOrderUpdateReq;
 import com.akarin.erp.sales.dto.SalesOrderDetail;
 import com.akarin.erp.sales.entity.SalesOrder;
 import com.akarin.erp.sales.service.SalesOrderService;
@@ -33,6 +34,12 @@ public class SalesOrderController {
     @PostMapping
     @PreAuthorize("hasAuthority('sales:write')")
     public R<SalesOrderDetail> create(@Valid @RequestBody SalesOrderCreateReq req) { return R.ok(service.create(req)); }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('sales:write')")
+    public R<SalesOrderDetail> update(@PathVariable Long id, @Valid @RequestBody SalesOrderUpdateReq req) {
+        return R.ok(service.update(id, req));
+    }
 
     @PostMapping("/{id}/submit")
     @PreAuthorize("hasAuthority('sales:write')")

@@ -2,6 +2,7 @@ package com.akarin.erp.workflow.service;
 
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.exception.ErrorCode;
+import com.akarin.erp.common.util.Versions;
 import com.akarin.erp.workflow.dto.DefinitionReq;
 import com.akarin.erp.workflow.dto.DefinitionView;
 import com.akarin.erp.workflow.entity.ApprovalInstance;
@@ -11,6 +12,8 @@ import com.akarin.erp.workflow.mapper.ApprovalInstanceMapper;
 import com.akarin.erp.workflow.mapper.NodeDefMapper;
 import com.akarin.erp.workflow.mapper.ProcessDefMapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -50,13 +53,25 @@ public class DefinitionService {
     public DefinitionView save(String bizType, DefinitionReq req) {
         guardNoPending(bizType);
         ProcessDef p = find(bizType);
+        boolean enabled = req.enabled() == null || req.enabled();
         if (p == null) {
             p = new ProcessDef();
             p.setBizType(bizType);
+            p.setName(req.name());
+            p.setEnabled(enabled);
+            p.setVersion(0);
+            processMapper.insert(p);
+        } else {
+            // 更新须带客户端 version；只 SET 可编辑字段，不整行写回
+            Versions.requirePresent(req.version());
+            Versions.requireOneRow(processMapper.update(null, new LambdaUpdateWrapper<ProcessDef>()
+                    .eq(ProcessDef::getId, p.getId()).eq(ProcessDef::getVersion, req.version())
+                    .set(ProcessDef::getName, req.name())
+                    .set(ProcessDef::getEnabled, enabled)
+                    .set(ProcessDef::getUpdatedAt, LocalDateTime.now())
+                    .setSql("version = version + 1")));
+            p = find(bizType);
         }
-        p.setName(req.name());
-        p.setEnabled(req.enabled() == null || req.enabled());
-        if (p.getId() == null) processMapper.insert(p); else processMapper.updateById(p);
         // 旧节点逻辑删除，保留给历史审批实例查看
         nodeMapper.delete(new LambdaQueryWrapper<NodeDef>().eq(NodeDef::getProcessId, p.getId()));
         int seq = 1;

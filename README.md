@@ -172,8 +172,8 @@ ALTER TABLE mdm_material MODIFY created_at DATETIME DEFAULT CURRENT_TIMESTAMP, M
 新的权限点（8 `sys:read`、9 `sys:write`、10 `workflow:admin`）由 `data.sql` 幂等插入，启动时自动补齐。
 
 ## 乐观锁（version）
-- 四类主数据、用户、角色、权限点都有 `version` 字段（MyBatis-Plus `@Version`），列表和详情接口都会返回。
-- 更新接口（`PUT /api/mdm/*/{id}`、`PUT /api/sys/users/{id}`、`PUT /api/sys/roles/{id}`、`PUT /api/sys/permissions/{id}`）必须在请求体里带上查询到的 `version`：
+- 四类主数据、用户、角色、权限点、**采购单、销售单、流程定义**都有 `version` 字段（MyBatis-Plus `@Version`），列表和详情接口都会返回。
+- 更新接口（`PUT /api/mdm/*/{id}`、`PUT /api/sys/users/{id}`、`PUT /api/sys/roles/{id}`、`PUT /api/sys/permissions/{id}`、`PUT /api/purchase/orders/{id}`、`PUT /api/sales/orders/{id}`、`PUT /api/workflow/definitions/{bizType}`）必须在请求体里带上查询到的 `version`：
   - 不传返回 400（"version 不能为空…"）；
   - 和库里的不一致（别人已经改过）返回 409/40900（"数据已被修改，请刷新后重试"），前端应重新拉取详情再编辑；
   - 成功后返回的 `version` 加 1。
@@ -186,6 +186,9 @@ ALTER TABLE mdm_warehouse ADD COLUMN version INT NOT NULL DEFAULT 0;
 ALTER TABLE sys_user       ADD COLUMN version INT NOT NULL DEFAULT 0;
 ALTER TABLE sys_role       ADD COLUMN version INT NOT NULL DEFAULT 0;
 ALTER TABLE sys_permission ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE pur_order       ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE sal_order       ADD COLUMN version INT NOT NULL DEFAULT 0;
+ALTER TABLE wf_process_def  ADD COLUMN version INT NOT NULL DEFAULT 0;
 ```
 
 ## 金额与数量（BigDecimal）
