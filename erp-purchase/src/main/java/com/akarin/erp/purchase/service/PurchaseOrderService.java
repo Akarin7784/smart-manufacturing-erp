@@ -87,7 +87,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
                 .set(PurchaseOrder::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1"));
         if (rows != 1) {
-            // 0 行：重读区分原因——已不是草稿（被并发提交/审批）→ 400；否则 version 过期 → 40900。事务回滚，明细替换一并撤销
+            // 0 行：重读区分原因——已不是草稿（被并发提交/审批）→ 409/40903；否则 version 过期 → 40900。事务回滚，明细替换一并撤销
             requireDraft(require(id));
             Versions.requireOneRow(rows);
         }
@@ -180,7 +180,7 @@ public class PurchaseOrderService extends ServiceImpl<PurchaseOrderMapper, Purch
     }
 
     private void requireDraft(PurchaseOrder o) {
-        if (!"DRAFT".equals(o.getStatus())) throw new BizException("仅草稿可编辑，当前: " + o.getStatus());
+        if (!"DRAFT".equals(o.getStatus())) throw new BizException(ErrorCode.ORDER_STATUS_CHANGED, ErrorCode.ORDER_STATUS_CHANGED.getDefaultMsg());   // 不是草稿 → 409/40903
     }
 
     private PurchaseOrder require(Long id) {

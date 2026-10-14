@@ -168,8 +168,8 @@ class OrderVersionIntegrationTest extends SysTestSupport {
         assertThat(code(admin, "PUT", "/api/purchase/orders/999999", updateBody(0, "supplierId", sup, "x"))).isEqualTo(404);
     }
 
-    /** 1) 编辑读到草稿之后、写入之前，并发提交把单据改成 PENDING：WHERE status='DRAFT' 拦住 → 400（不是 40900），且不改任何字段 */
-    @Test void editLosesToConcurrentSubmitWith400AndNoChange() throws Exception {
+    /** 1) 编辑读到草稿之后、写入之前，并发提交把单据改成 PENDING：WHERE status='DRAFT' 拦住 → 409/40903（不是 40900），且不改任何字段 */
+    @Test void editLosesToConcurrentSubmitWith40903AndNoChange() throws Exception {
         for (String[] t : new String[][]{{"purchase", "pur_order", "supplierId"}, {"sales", "sal_order", "customerId"}}) {
             long partner = t[0].equals("purchase") ? sup : cust;
             long id = ok(admin, "POST", "/api/" + t[0] + "/orders", createBody(t[2], partner)).path("order").path("id").asLong();
@@ -177,8 +177,8 @@ class OrderVersionIntegrationTest extends SysTestSupport {
             armAction(t[1], id, () -> jdbc.update("UPDATE " + t[1] + " SET status='PENDING' WHERE id=?", id));
             JsonNode r = call(admin, "PUT", "/api/" + t[0] + "/orders/" + id, updateBody(0, t[2], partner, "lost"));
             assertThat(fired).isEqualTo(1);
-            assertThat(r.path("code").asInt()).as(t[0]).isEqualTo(400);
-            assertThat(r.path("msg").asText()).contains("仅草稿可编辑");
+            assertThat(r.path("code").asInt()).as(t[0]).isEqualTo(40903);
+            assertThat(r.path("msg").asText()).isEqualTo("单据状态已变更，请刷新后重试");
             assertThat(jdbc.queryForObject("SELECT remark FROM " + t[1] + " WHERE id=?", String.class, id)).isEqualTo("r0");
             assertThat(jdbc.queryForObject("SELECT status FROM " + t[1] + " WHERE id=?", String.class, id)).isEqualTo("PENDING");
             assertThat(dbVersion(t[1], id)).isZero();
@@ -237,7 +237,7 @@ class OrderVersionIntegrationTest extends SysTestSupport {
         assertThat(ok(admin, "GET", "/api/purchase/orders/" + id, null).path("order").path("version").asInt()).isEqualTo(v + 1);
         assertThat(ok(admin, "GET", "/api/purchase/orders/" + id, null).path("order").path("status").asText()).isEqualTo("PENDING");
         // 审批中不可编辑
-        assertThat(code(admin, "PUT", "/api/purchase/orders/" + id, updateBody(v + 1, "supplierId", sup, "no"))).isEqualTo(400);
+        assertThat(code(admin, "PUT", "/api/purchase/orders/" + id, updateBody(v + 1, "supplierId", sup, "no"))).as("审批中不可编辑").isEqualTo(40903);
         decideAsApprover(ap, true);
         JsonNode after = ok(admin, "GET", "/api/purchase/orders/" + id, null).path("order");
         assertThat(after.path("status").asText()).isEqualTo("APPROVED");
@@ -274,7 +274,7 @@ class OrderVersionIntegrationTest extends SysTestSupport {
         // update() 里 require(id) → selectById 触发钩子
         assertThat(code(admin, "PUT", "/api/purchase/orders/" + id,
                 updateBody(v, "supplierId",
-                        sup, "should-fail"))).isIn(40900, 400); // 若钩子先改成 APPROVED，编辑会因非草稿 400；若 version 变了则 40900
+                        sup, "should-fail"))).isIn(40900, 40903); // 若钩子先改成 APPROVED，编辑会因非草稿 400；若 version 变了则 40900
         assertThat(fired).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT status FROM pur_order WHERE id=?", String.class, id)).isEqualTo("APPROVED");
         assertThat(jdbc.queryForObject("SELECT remark FROM pur_order WHERE id=?", String.class, id)).isNotEqualTo("should-fail");
@@ -316,7 +316,7 @@ class OrderVersionIntegrationTest extends SysTestSupport {
             purchaseOrders.onApproval(new ApprovalFinishedEvent(PurchaseOrderService.BIZ_TYPE, id2, true, "t"));
         });
         assertThat(code(admin, "PUT", "/api/purchase/orders/" + id2, updateBody(v2, "supplierId",
-                sup, "lose"))).isIn(40900, 400);
+                sup, "lose"))).isIn(40900, 40903);
         assertThat(jdbc.queryForObject("SELECT status FROM pur_order WHERE id=?", String.class, id2)).isEqualTo("APPROVED");
     }
 
@@ -356,5 +356,23 @@ class OrderVersionIntegrationTest extends SysTestSupport {
                         .as("round " + round).isEqualTo("APPROVED");
             }
         } finally { pool.shutdownNow(); }
+    }
+
+    /** 非草稿 + 非法数量同时出现：以 400 为准。@Valid 参数校验在进入服务方法之前执行，服务层的状态判断根本不会运行，结果是确定的 */
+    @Test void invalidInputOnNonDraftOrderIs400NotStatusChanged() throws Exception {
+        for (String[] t : new String[][]{{"purchase", "pur_order", "supplierId"}, {"sales", "sal_order", "customerId"}}) {
+            long partner = t[0].equals("purchase") ? sup : cust;
+            long id = ok(admin, "POST", "/api/" + t[0] + "/orders", createBody(t[2], partner)).path("order").path("id").asLong();
+            ok(admin, "POST", "/api/" + t[0] + "/orders/" + id + "/submit", null);   // 已是 PENDING
+            int v = dbVersion(t[1], id);
+            String url = "/api/" + t[0] + "/orders/" + id;
+            String bad = updateBody(v, t[2], partner, "x").replace("\"qty\":\"2\"", "\"qty\":\"-1\"");
+            JsonNode r = call(admin, "PUT", url, bad);
+            assertThat(r.path("code").asInt()).as(t[0] + " 非法数量 + 非草稿").isEqualTo(400);
+            assertThat(r.path("msg").asText()).isEqualTo("数量必须大于 0");
+            // 对照：同一订单、合法输入 → 40903
+            assertThat(code(admin, "PUT", url, updateBody(v, t[2], partner, "x"))).isEqualTo(40903);
+            assertThat(dbVersion(t[1], id)).isEqualTo(v);
+        }
     }
 }

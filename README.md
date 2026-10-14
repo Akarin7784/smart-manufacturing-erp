@@ -228,6 +228,7 @@ ALTER TABLE wf_process_def  ADD COLUMN version INT NOT NULL DEFAULT 0;
 | 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
 | 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`：被订单、库存、应收应付单、收付款引用 |
 | 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |
+| 409 | 40903 | 单据状态已变更，提示"单据状态已变更，请刷新后重试" | `PUT /api/purchase/orders/{id}`、`PUT /api/sales/orders/{id}`：订单已不是草稿（读出时已不是草稿，或并发提交/审批导致定向更新影响 0 行后重读发现不是草稿）。参数校验先于状态判断：非法输入一律 400 |
 | 500 | 500 | 系统异常 | 未预期的异常 |
 
 ## 财务闭环
