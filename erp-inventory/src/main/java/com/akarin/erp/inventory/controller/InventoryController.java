@@ -48,13 +48,13 @@ public class InventoryController {
     @PostMapping("/in")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> in(@Valid @RequestBody StockReq r) {
-        return R.ok(txRetry.run(() -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+        return R.ok(txRetry.run("inventory.in", () -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
     }
 
     /** 手工出库（其他出库） */
     @PostMapping("/out")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> out(@Valid @RequestBody StockReq r) {
-        return R.ok(txRetry.run(() -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+        return R.ok(txRetry.run("inventory.out", () -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
     }
 }

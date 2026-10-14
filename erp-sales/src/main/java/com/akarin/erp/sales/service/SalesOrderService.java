@@ -144,10 +144,11 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
                 .set(SalesOrder::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1")));
         d.order().setStatus("SHIPPED");
-        for (var it : d.items()) {
-            inventoryService.stockOut(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
-                    "SALES_SHIPMENT", d.order().getOrderNo(), null);
-        }
+        // 合并同物料行、按 (materialId, warehouseId) 固定顺序加锁，避免正反序单据并发死锁；流水按合并后的物料各一条
+        inventoryService.stockOutAll(d.items().stream()
+                .map(it -> new com.akarin.erp.inventory.service.InventoryService.StockLine(
+                        it.getMaterialId(), d.order().getWarehouseId(), it.getQty()))
+                .toList(), "SALES_SHIPMENT", d.order().getOrderNo());
         BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
         publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.SALES_SHIPMENT,
                 d.order().getOrderNo(), d.order().getCustomerId(), amount));
