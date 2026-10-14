@@ -124,36 +124,110 @@ class OrderVersionIntegrationTest extends SysTestSupport {
                 ",\"remark\":\"" + remark + "\",\"items\":[{\"materialId\":" + mat + ",\"qty\":\"2\",\"price\":\"10\"}]}";
     }
 
+    int dbVersion(String table, long id) {
+        return jdbc.queryForObject("SELECT version FROM " + table + " WHERE id=?", Integer.class, id);
+    }
+
     @Test void purchaseCreateReturnsVersionAndUpdateRequiresIt() throws Exception {
         JsonNode d = ok(admin, "POST", "/api/purchase/orders", createBody("supplierId", sup));
-        assertThat(d.path("order").path("version").asInt()).isEqualTo(1); // create 回写合计 bump 一次
         long id = d.path("order").path("id").asLong();
+        assertThat(d.path("order").path("version").asInt()).as("新建单 version = 0").isZero();
+        assertThat(dbVersion("pur_order", id)).isZero();
+        assertThat(d.path("order").path("totalAmount").asText()).isEqualTo("10.00");
         String url = "/api/purchase/orders/" + id;
-        assertThat(code(admin, "PUT", url, updateBody(1, "supplierId", sup, "x").replace("\"version\":1,", ""))).isEqualTo(400);
-        // missing version entirely
         assertThat(call(admin, "PUT", url, "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
-                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":\"1\",\"price\":\"1\"}]}").path("code").asInt()).isEqualTo(400);
-        JsonNode u = ok(admin, "PUT", url, updateBody(1, "supplierId", sup, "edited"));
-        assertThat(u.path("order").path("version").asInt()).isEqualTo(2);
+                ",\"items\":[{\"materialId\":" + mat + ",\"qty\":\"1\",\"price\":\"1\"}]}").path("code").asInt()).as("缺 version").isEqualTo(400);
+        JsonNode u = ok(admin, "PUT", url, updateBody(0, "supplierId", sup, "edited"));
+        assertThat(u.path("order").path("version").asInt()).isEqualTo(1);
         assertThat(u.path("order").path("remark").asText()).isEqualTo("edited");
         assertThat(u.path("order").path("totalAmount").asText()).isEqualTo("20.00");
-        assertThat(code(admin, "PUT", url, updateBody(1, "supplierId", sup, "stale"))).isEqualTo(40900);
-        // 列表也带 version
+        assertThat(code(admin, "PUT", url, updateBody(0, "supplierId", sup, "stale"))).isEqualTo(40900);
         JsonNode list = ok(admin, "GET", "/api/purchase/orders?status=DRAFT", null);
         boolean found = false;
         for (JsonNode r : list.path("records")) if (r.path("id").asLong() == id) {
-            assertThat(r.path("version").asInt()).isEqualTo(2); found = true;
+            assertThat(r.path("version").asInt()).isEqualTo(1); found = true;
         }
         assertThat(found).isTrue();
     }
 
     @Test void salesSameVersionRules() throws Exception {
         JsonNode d = ok(admin, "POST", "/api/sales/orders", createBody("customerId", cust));
-        assertThat(d.path("order").path("version").asInt()).isEqualTo(1);
         long id = d.path("order").path("id").asLong();
-        assertThat(ok(admin, "PUT", "/api/sales/orders/" + id, updateBody(1, "customerId", cust, "s"))
-                .path("order").path("version").asInt()).isEqualTo(2);
-        assertThat(code(admin, "PUT", "/api/sales/orders/" + id, updateBody(1, "customerId", cust, "old"))).isEqualTo(40900);
+        assertThat(d.path("order").path("version").asInt()).isZero();
+        assertThat(dbVersion("sal_order", id)).isZero();
+        assertThat(ok(admin, "PUT", "/api/sales/orders/" + id, updateBody(0, "customerId", cust, "s"))
+                .path("order").path("version").asInt()).isEqualTo(1);
+        assertThat(code(admin, "PUT", "/api/sales/orders/" + id, updateBody(0, "customerId", cust, "old"))).isEqualTo(40900);
+    }
+
+    /** 3) 不存在的单据：先 404，即使没带 version */
+    @Test void updateMissingOrderIs404BeforeVersionCheck() throws Exception {
+        String noVer = "{\"warehouseId\":" + wh + ",\"items\":[{\"materialId\":" + mat + ",\"qty\":\"1\",\"price\":\"1\"}]";
+        assertThat(code(admin, "PUT", "/api/purchase/orders/999999", noVer + ",\"supplierId\":" + sup + "}")).isEqualTo(404);
+        assertThat(code(admin, "PUT", "/api/sales/orders/999999", noVer + ",\"customerId\":" + cust + "}")).isEqualTo(404);
+        assertThat(code(admin, "PUT", "/api/purchase/orders/999999", updateBody(0, "supplierId", sup, "x"))).isEqualTo(404);
+    }
+
+    /** 1) 编辑读到草稿之后、写入之前，并发提交把单据改成 PENDING：WHERE status='DRAFT' 拦住 → 400（不是 40900），且不改任何字段 */
+    @Test void editLosesToConcurrentSubmitWith400AndNoChange() throws Exception {
+        for (String[] t : new String[][]{{"purchase", "pur_order", "supplierId"}, {"sales", "sal_order", "customerId"}}) {
+            long partner = t[0].equals("purchase") ? sup : cust;
+            long id = ok(admin, "POST", "/api/" + t[0] + "/orders", createBody(t[2], partner)).path("order").path("id").asLong();
+            // 只改状态、不动 version：单靠 version 条件拦不住，必须靠 status = 'DRAFT'
+            armAction(t[1], id, () -> jdbc.update("UPDATE " + t[1] + " SET status='PENDING' WHERE id=?", id));
+            JsonNode r = call(admin, "PUT", "/api/" + t[0] + "/orders/" + id, updateBody(0, t[2], partner, "lost"));
+            assertThat(fired).isEqualTo(1);
+            assertThat(r.path("code").asInt()).as(t[0]).isEqualTo(400);
+            assertThat(r.path("msg").asText()).contains("仅草稿可编辑");
+            assertThat(jdbc.queryForObject("SELECT remark FROM " + t[1] + " WHERE id=?", String.class, id)).isEqualTo("r0");
+            assertThat(jdbc.queryForObject("SELECT status FROM " + t[1] + " WHERE id=?", String.class, id)).isEqualTo("PENDING");
+            assertThat(dbVersion(t[1], id)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + t[1] + "_item WHERE order_id=? AND deleted=0", Integer.class, id))
+                    .as("明细替换随事务回滚").isEqualTo(1);
+            jdbc.update("UPDATE " + t[1] + " SET status='DRAFT' WHERE id=?", id);
+        }
+    }
+
+    /** 1) 窗口内仍是草稿、只是 version 被别人改了 → 40900 */
+    @Test void editStillDraftButVersionChangedIs40900() throws Exception {
+        long id = ok(admin, "POST", "/api/purchase/orders", createBody("supplierId", sup)).path("order").path("id").asLong();
+        arm("pur_order", id);   // 默认动作：version + 1
+        assertThat(code(admin, "PUT", "/api/purchase/orders/" + id, updateBody(0, "supplierId", sup, "x"))).isEqualTo(40900);
+        assertThat(fired).isEqualTo(1);
+    }
+
+    /** 4) 收货 / 发货返回的 order.version、status 与库里一致；提交、审批返回体不含订单 version */
+    @Test void receiveAndShipReturnVersionMatchingDatabase() throws Exception {
+        long po = ok(admin, "POST", "/api/purchase/orders", createBody("supplierId", sup)).path("order").path("id").asLong();
+        JsonNode sub = ok(admin, "POST", "/api/purchase/orders/" + po + "/submit", null);
+        assertThat(sub.has("order")).as("提交只返回 approvalId，没有订单 version 可过期").isFalse();
+        assertThat(dbVersion("pur_order", po)).isEqualTo(1);
+        decideAsApprover(sub.path("approvalId").asLong(), true);
+        assertThat(dbVersion("pur_order", po)).isEqualTo(2);
+        JsonNode rcv = ok(admin, "POST", "/api/purchase/orders/" + po + "/receive", null).path("order");
+        assertThat(rcv.path("status").asText()).isEqualTo("RECEIVED");
+        assertThat(rcv.path("version").asInt()).isEqualTo(dbVersion("pur_order", po)).isEqualTo(3);
+
+        long so = ok(admin, "POST", "/api/sales/orders", createBody("customerId", cust)).path("order").path("id").asLong();
+        long ap = ok(admin, "POST", "/api/sales/orders/" + so + "/submit", null).path("approvalId").asLong();
+        decideAsApprover(ap, true);
+        JsonNode shp = ok(admin, "POST", "/api/sales/orders/" + so + "/ship", null).path("order");
+        assertThat(shp.path("status").asText()).isEqualTo("SHIPPED");
+        assertThat(shp.path("version").asInt()).isEqualTo(dbVersion("sal_order", so)).isEqualTo(3);
+        // 收货 / 发货之后再拿返回的 version 不会被误判为过期：GET 详情一致
+        assertThat(ok(admin, "GET", "/api/sales/orders/" + so, null).path("order").path("version").asInt()).isEqualTo(3);
+    }
+
+    /** 4) 驳回：回到草稿且 version 递增，驳回后用 GET 拿到的 version 可以直接编辑 */
+    @Test void rejectBumpsVersionAndEditWithFreshVersionWorks() throws Exception {
+        long po = ok(admin, "POST", "/api/purchase/orders", createBody("supplierId", sup)).path("order").path("id").asLong();
+        long ap = ok(admin, "POST", "/api/purchase/orders/" + po + "/submit", null).path("approvalId").asLong();
+        decideAsApprover(ap, false);
+        JsonNode g = ok(admin, "GET", "/api/purchase/orders/" + po, null).path("order");
+        assertThat(g.path("status").asText()).isEqualTo("DRAFT");
+        assertThat(g.path("version").asInt()).isEqualTo(2).isEqualTo(dbVersion("pur_order", po));
+        assertThat(ok(admin, "PUT", "/api/purchase/orders/" + po, updateBody(2, "supplierId", sup, "after-reject"))
+                .path("order").path("version").asInt()).isEqualTo(3);
     }
 
     @Test void submitAndApprovalBumpVersionAndConflictWithStaleEdit() throws Exception {
@@ -167,7 +241,7 @@ class OrderVersionIntegrationTest extends SysTestSupport {
         decideAsApprover(ap, true);
         JsonNode after = ok(admin, "GET", "/api/purchase/orders/" + id, null).path("order");
         assertThat(after.path("status").asText()).isEqualTo("APPROVED");
-        assertThat(after.path("version").asInt()).isEqualTo(v + 2);
+        assertThat(after.path("version").asInt()).isEqualTo(v + 2).isEqualTo(dbVersion("pur_order", id));
     }
 
     @Test void processDefUpdateRequiresVersion() throws Exception {
