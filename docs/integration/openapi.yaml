@@ -145,6 +145,9 @@ paths:
                 keyReused: {$ref: '#/components/examples/KeyReused'}
                 inProgress: {$ref: '#/components/examples/InProgress'}
                 stateConflict: {$ref: '#/components/examples/StateConflict'}
+                notCompleted:
+                  summary: 工单未 COMPLETED（40903）
+                  value: {code: 40903, msg: "工单 WO-20261014-0001 状态 IN_PROGRESS，未 COMPLETED，不允许完工入库", data: {workOrderNo: WO-20261014-0001, status: IN_PROGRESS}}
         '503': {$ref: '#/components/responses/Busy'}
 
   /api/integration/mes/scraps:
@@ -268,10 +271,11 @@ components:
     erpServiceToken:
       type: oauth2
       description: |
-        **推荐方案（定稿）**：ERP 签发服务令牌。MES 以 client `mes-integration` 调
+        **唯一方案（定稿）**：ERP 自有集成服务账号，ERP 签发服务令牌。MES 以 client `mes-integration` 调
         `POST /api/auth/oauth2/token`（`grant_type=client_credentials`，client_secret_basic），
         获得 ERP 签发的 JWT：`aud=erp-api`，`sub=svc:mes-integration`，`scope` 为空格分隔。
-        回调幂等按 `sub`（服务身份）隔离。备选方案（ERP 验 MES JWKS）见 README §2。
+        回调幂等按 `sub`（服务身份）隔离。这是唯一方案：ERP **不**校验 MES JWKS / MES 签发的令牌。
+        用户 JWT 调回调接口、或服务令牌调普通业务接口 → 403（code 403）。
         密钥只来自环境变量（如 `ERP_MES_CLIENT_SECRET`），不得入库。
       flows:
         clientCredentials:
@@ -295,7 +299,7 @@ components:
       in: header
       required: true
       description: |
-        回调方向：**必须等于 body.requestNo**，否则 400（code 40002）。
+        回调方向：**必须等于 body.requestNo**；请求头缺失、body.requestNo 缺失或两者不一致 → 400（code 400）。
         去重范围 = (服务身份 sub, requestNo)，保留 ≥ 90 天；不复用用户维度 24h 幂等表。
       schema: {type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$'}
       example: MI-WO-20261014-0001-001
@@ -325,8 +329,14 @@ components:
               summary: 缺少 Idempotency-Key
               value: {code: 400, msg: "Idempotency-Key 不能为空"}
             keyMismatch:
-              summary: 请求头与 requestNo 不一致（40002，计划新增）
-              value: {code: 40002, msg: "Idempotency-Key 必须等于 requestNo"}
+              summary: 请求头与 requestNo 不一致
+              value: {code: 400, msg: "Idempotency-Key 必须等于 requestNo"}
+            requestNoMissing:
+              summary: body 缺 requestNo
+              value: {code: 400, msg: "requestNo: 不能为空"}
+            tooManyDecimals:
+              summary: 数量超过 6 位小数（不四舍五入，直接拒绝）
+              value: {code: 400, msg: "quantity: 最多 6 位小数"}
             unknownRef:
               summary: 引用不存在（物料 / 仓库 / 生产订单）
               value: {code: 400, msg: "物料 RM-UNKNOWN 不存在"}
@@ -346,6 +356,7 @@ components:
           schema: {$ref: '#/components/schemas/R'}
           examples:
             wrongScope: {summary: 缺少对应 scope, value: {code: 403, msg: 无权限}}
+            userToken: {summary: 用户 JWT 调用集成回调接口, value: {code: 403, msg: 无权限}}
     Busy:
       description: 取号繁忙（50301），未落库、未占用 requestNo，可原样退避重试。
       content:
@@ -362,14 +373,14 @@ components:
       summary: 同 requestNo 首次请求仍在处理（40904），退避重试
       value: {code: 40904, msg: 请求处理中，请稍后重试}
     StateConflict:
-      summary: 生产订单状态不允许（40905，计划新增）
-      value: {code: 40905, msg: "生产订单 MO-20261014-0001 当前状态 CLOSED，不允许该操作", data: {erpProductionOrderNo: MO-20261014-0001, status: CLOSED}}
+      summary: 单据状态不允许（40903，已有 ORDER_STATUS_CHANGED）
+      value: {code: 40903, msg: "生产订单 MO-20261014-0001 当前状态 CLOSED，不允许该操作", data: {erpProductionOrderNo: MO-20261014-0001, status: CLOSED}}
 
   schemas:
     Decimal6:
       type: string
       pattern: '^\d{1,12}(\.\d{1,6})?$'
-      description: 非负十进制字符串，最多 6 位小数；ERP 下达时固定输出 6 位（如 "100.000000"）。比较/摘要按数值规范化（1.5 == 1.500000）。
+      description: 非负十进制字符串，最多 6 位小数，超过 → 400，**不做舍入**；ERP 下达时固定输出 6 位（如 "100.000000"）。比较/摘要按数值规范化（1.5 == 1.500000）。
     R:
       type: object
       description: ERP 统一响应体（过渡期保持）。`code=0` 成功；非 0 见 ErrorCode。
@@ -401,18 +412,17 @@ components:
         | code | HTTP | problem type | 含义 | MES 重试 |
         | --- | --- | --- | --- | --- |
         | 0 | 200/201 | — | 成功 / 重放 | — |
-        | 400 | 400 | validation-error | 参数校验失败、引用不存在 | 否 |
-        | 40002（计划） | 400 | idempotency-key-mismatch | Idempotency-Key ≠ requestNo 或缺失 | 否 |
+        | 400 | 400 | validation-error | 参数校验失败、引用不存在、数量超 6 位小数、Idempotency-Key/requestNo 缺失或不一致 | 否 |
         | 401 | 401 | authentication-required | 令牌缺失/无效/过期/aud 不符 | 刷新令牌重试 1 次 |
-        | 403 | 403 | access-denied | scope 不符 | 否 |
+        | 403 | 403 | access-denied | scope 不符；用户 JWT 调回调；服务令牌调业务接口（ErrorCode.FORBIDDEN） | 否 |
         | 40900 | 409 | concurrent-modification | 并发冲突重试用尽 | 是（退避） |
         | 40902 | 409 | idempotency-key-conflict | requestNo 已用于不同内容 | 否 |
         | 40904 | 409 | idempotency-in-progress | 同 requestNo 仍在处理 | 是（退避） |
-        | 40905（计划） | 409 | erp-document-state-conflict | 生产订单状态不允许 | 否 |
+        | 40903 | 409 | erp-document-state-conflict | 单据状态不允许（如工单未 COMPLETED 即完工入库；ErrorCode.ORDER_STATUS_CHANGED） | 否 |
         | 40906（计划） | 409 | material-shortage | 库存不足 | 否 |
         | 500 | 500 | internal-error | 系统异常 | 是（退避） |
         | 50301 | 503 | service-busy | 取号繁忙 | 是（退避） |
-      enum: [0, 400, 40002, 401, 403, 40900, 40902, 40904, 40905, 40906, 500, 50301]
+      enum: [0, 400, 401, 403, 40900, 40902, 40903, 40904, 40906, 500, 50301]
     MaterialIssueLine:
       type: object
       required: [lineNo, materialCode, quantity, uom]
