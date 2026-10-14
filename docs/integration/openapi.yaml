@@ -1,0 +1,485 @@
+# ERP ↔ MES M2 集成契约（唯一事实来源，仅契约，无实现）。
+# 来源：MES 提案 Akarin7784/smart-manufacturing-cloud#86（docs/api/erp-integration-openapi.yaml @ 25670ca），
+# 按 PM 定稿覆盖冲突项（见 README.md §0）。改动须走 PR，由 PM 审查。
+openapi: 3.1.0
+info:
+  title: ERP ↔ MES 集成接口（M2）
+  version: 1.0.0
+  summary: 生产订单下达（ERP→MES）与领料 / 完工入库 / 报废回传（MES→ERP）。
+  description: |
+    **状态：CONTRACT-ONLY**。本文件定义契约，ERP 侧实现另开 PR；双方不做端到端联调，按本契约用 Mock 测试。
+
+    - **ERP → MES**：`dispatchProductionOrder` 由 MES 托管，此处记录 ERP 将如何调用（路径沿用 MES #86）。
+      其错误体由 MES 定义（problem+json），以 MES 仓库为准，本文件只列 ERP 需处理的状态码。
+    - **MES → ERP**：三个回调由 ERP 托管，**本文件为权威定义**。
+
+    错误体（过渡期）：ERP 继续返回 `R{code,msg,data}`，`code` 数字码与 problem type 对照见 `error-codes.md`
+    及 `components.schemas.ErrorCode`。HTTP 状态 = 错误码大类。
+  contact:
+    name: smart-manufacturing-erp
+    url: https://github.com/Akarin7784/smart-manufacturing-erp
+servers:
+  - url: https://erp.example.invalid
+    description: ERP 基址占位（MES→ERP 回调；真实地址经配置注入）
+  - url: http://localhost:8081
+    description: ERP 本地
+tags:
+  - name: mes-to-erp
+    description: MES 调用 ERP（ERP 托管，权威）
+  - name: erp-to-mes
+    description: ERP 调用 MES（MES 托管，此处为调用方视角的引用）
+
+security:
+  - erpServiceToken: []
+
+paths:
+  /api/integration/mes/material-issues:
+    post:
+      tags: [mes-to-erp]
+      operationId: postMaterialIssue
+      summary: 领料回传（MES→ERP）
+      description: |
+        触发：工单下达（派工）后，MES 按领料单完成发料时回传；ERP 生成生产领料出库单并扣减库存。
+        退料（#72）须在工单 COMPLETED 之前，走后续契约（不在 M2 范围）。
+        需要 scope `erp:integration:material-issue`。幂等见 README §3。
+      security:
+        - erpServiceToken: [erp:integration:material-issue]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MaterialIssueRequest'}
+            examples:
+              ok:
+                summary: 领料回传
+                value:
+                  requestNo: MI-WO-20261014-0001-001
+                  workOrderNo: WO-20261014-0001
+                  erpProductionOrderNo: MO-20261014-0001
+                  warehouseCode: W01
+                  occurredAt: "2026-10-14T16:00:00+08:00"
+                  lines:
+                    - lineNo: 1
+                      materialCode: RM-STEEL-01
+                      quantity: "12.500000"
+                      uom: kg
+                      lotNo: LOT-A1
+      responses:
+        '201':
+          description: 首次受理，已生成 ERP 单据。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RCallbackAck'}
+              examples:
+                created:
+                  value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-001, erpDocumentNo: MI-20261014-0088, replayed: false, acceptedAt: "2026-10-14T16:00:01+08:00"}}
+        '200':
+          $ref: '#/components/responses/Replayed'
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: 业务冲突 / 幂等冲突 / 处理中。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/R'}
+              examples:
+                keyReused: {$ref: '#/components/examples/KeyReused'}
+                inProgress: {$ref: '#/components/examples/InProgress'}
+                stockShortage:
+                  summary: 库存不足（40906，计划新增）
+                  value: {code: 40906, msg: "仓库 W01 物料 RM-STEEL-01 可用量不足", data: {materialCode: RM-STEEL-01, warehouseCode: W01, available: "10.000000"}}
+                stateConflict: {$ref: '#/components/examples/StateConflict'}
+        '503': {$ref: '#/components/responses/Busy'}
+
+  /api/integration/mes/finished-goods-receipts:
+    post:
+      tags: [mes-to-erp]
+      operationId: postFinishedGoodsReceipt
+      summary: 完工入库回传（MES→ERP）
+      description: |
+        触发：MES 工单状态变为 **COMPLETED**（不是 CLOSED）时回传合格品数量；ERP 生成完工入库单并增加库存。
+        需要 scope `erp:integration:finished-goods-receipt`。
+      security:
+        - erpServiceToken: [erp:integration:finished-goods-receipt]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/FinishedGoodsReceiptRequest'}
+            examples:
+              ok:
+                value:
+                  requestNo: FGR-WO-20261014-0001-001
+                  workOrderNo: WO-20261014-0001
+                  erpProductionOrderNo: MO-20261014-0001
+                  productCode: FG-PUMP-01
+                  quantity: "98.000000"
+                  uom: 件
+                  warehouseCode: W01
+                  lotNo: FG-LOT-01
+                  occurredAt: "2026-10-21T18:00:00+08:00"
+      responses:
+        '201':
+          description: 首次受理。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RCallbackAck'}
+              examples:
+                created:
+                  value: {code: 0, msg: ok, data: {requestNo: FGR-WO-20261014-0001-001, erpDocumentNo: FG-20261021-0012, replayed: false, acceptedAt: "2026-10-21T18:00:02+08:00"}}
+        '200': {$ref: '#/components/responses/Replayed'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: 业务冲突 / 幂等冲突 / 处理中。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/R'}
+              examples:
+                keyReused: {$ref: '#/components/examples/KeyReused'}
+                inProgress: {$ref: '#/components/examples/InProgress'}
+                stateConflict: {$ref: '#/components/examples/StateConflict'}
+        '503': {$ref: '#/components/responses/Busy'}
+
+  /api/integration/mes/scraps:
+    post:
+      tags: [mes-to-erp]
+      operationId: postScrap
+      summary: 报废回传（MES→ERP）
+      description: |
+        触发：在工序上报废时**立即**回传（每次报废一笔）；ERP 生成报废出库单。
+        需要 scope `erp:integration:scrap`。
+      security:
+        - erpServiceToken: [erp:integration:scrap]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ScrapRequest'}
+            examples:
+              ok:
+                value:
+                  requestNo: SCR-WO-20261014-0001-OP20-001
+                  workOrderNo: WO-20261014-0001
+                  erpProductionOrderNo: MO-20261014-0001
+                  materialCode: FG-PUMP-01
+                  quantity: "2.000000"
+                  uom: 件
+                  warehouseCode: W01
+                  reasonCode: PROCESS_DEFECT
+                  operationNo: OP20
+                  occurredAt: "2026-10-20T11:30:00+08:00"
+      responses:
+        '201':
+          description: 首次受理。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RCallbackAck'}
+              examples:
+                created:
+                  value: {code: 0, msg: ok, data: {requestNo: SCR-WO-20261014-0001-OP20-001, erpDocumentNo: SC-20261020-0003, replayed: false, acceptedAt: "2026-10-20T11:30:01+08:00"}}
+        '200': {$ref: '#/components/responses/Replayed'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409':
+          description: 业务冲突 / 幂等冲突 / 处理中。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/R'}
+              examples:
+                keyReused: {$ref: '#/components/examples/KeyReused'}
+                inProgress: {$ref: '#/components/examples/InProgress'}
+                stateConflict: {$ref: '#/components/examples/StateConflict'}
+        '503': {$ref: '#/components/responses/Busy'}
+
+  /api/integration/erp/work-orders/dispatch:
+    servers:
+      - url: http://localhost:8080
+        description: MES 网关（MES 托管，见 MES docs/api/erp-integration-openapi.yaml）
+    post:
+      tags: [erp-to-mes]
+      operationId: dispatchProductionOrder
+      summary: 生产订单下达 → MES 创建工单（ERP 调用，MES 托管）
+      description: |
+        ERP 生产订单审批通过后调用；MES 创建 CREATED 工单，不自动 RELEASE。
+        - `Idempotency-Key` = `erpProductionOrderNo`；首次 201，重放 200 + `Idempotent-Replayed: true`。
+        - `quantity` 为 6 位小数字符串；**ERP 不传 `deviceId`**（MES 侧改为可选）。
+        - 令牌：ERP 向 MES auth-service 申请 `client_credentials`，client `erp-integration`，
+          scope `integration:workorder-dispatch`，aud `manufacturing-api`。
+        - 错误体为 MES 的 problem+json（type 见 MES 契约）。ERP 重试规则：网络错误/5xx/429 退避重试；
+          401 刷新令牌后重试一次；400/403/409/422 不重试，标记失败转人工。
+      security:
+        - mesServiceToken: [integration:workorder-dispatch]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/DispatchProductionOrderRequest'}
+            examples:
+              ok:
+                value:
+                  erpProductionOrderNo: MO-20261014-0001
+                  productCode: FG-PUMP-01
+                  quantity: "100.000000"
+                  uom: 件
+                  plannedStartDate: "2026-10-20"
+                  plannedFinishDate: "2026-10-25"
+                  warehouseCode: W01
+                  remark: 一车间紧急单
+      responses:
+        '201':
+          description: 已创建 MES 工单。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DispatchProductionOrderResponse'}
+              examples:
+                created:
+                  value: {workOrderNo: WO-20261014-0001, erpProductionOrderNo: MO-20261014-0001, productCode: FG-PUMP-01, quantity: "100.000000", uom: 件, status: CREATED, createdAt: "2026-10-14T14:30:00+08:00"}
+        '200':
+          description: '幂等重放，body 与首次一致，响应头 `Idempotent-Replayed: true`。'
+          headers:
+            Idempotent-Replayed:
+              schema: {type: string, enum: ["true"]}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DispatchProductionOrderResponse'}
+              examples:
+                replay:
+                  value: {workOrderNo: WO-20261014-0001, erpProductionOrderNo: MO-20261014-0001, productCode: FG-PUMP-01, quantity: "100.000000", uom: 件, status: CREATED, createdAt: "2026-10-14T14:30:00+08:00"}
+        '400': {description: '校验失败 / 缺幂等键（MES problem+json：validation-error、idempotency-key-required）。不重试。'}
+        '401': {description: '令牌缺失/无效/受众不符（authentication-required）。刷新令牌后重试一次。'}
+        '403': {description: 'scope 不符（access-denied）。不重试。'}
+        '409': {description: 'erp-production-order-conflict：该 ERP 单号已绑定其他工单。不重试。'}
+        '422': {description: 'idempotency-key-conflict / release-masterdata-invalid。不重试。'}
+
+components:
+  securitySchemes:
+    erpServiceToken:
+      type: oauth2
+      description: |
+        **推荐方案（定稿）**：ERP 签发服务令牌。MES 以 client `mes-integration` 调
+        `POST /api/auth/oauth2/token`（`grant_type=client_credentials`，client_secret_basic），
+        获得 ERP 签发的 JWT：`aud=erp-api`，`sub=svc:mes-integration`，`scope` 为空格分隔。
+        回调幂等按 `sub`（服务身份）隔离。备选方案（ERP 验 MES JWKS）见 README §2。
+        密钥只来自环境变量（如 `ERP_MES_CLIENT_SECRET`），不得入库。
+      flows:
+        clientCredentials:
+          tokenUrl: /api/auth/oauth2/token
+          scopes:
+            erp:integration:material-issue: 领料回传
+            erp:integration:finished-goods-receipt: 完工入库回传
+            erp:integration:scrap: 报废回传
+    mesServiceToken:
+      type: oauth2
+      description: MES auth-service 签发（ERP→MES 下达用），client `erp-integration`，aud `manufacturing-api`。
+      flows:
+        clientCredentials:
+          tokenUrl: http://localhost:8080/api/auth/oauth2/token
+          scopes:
+            integration:workorder-dispatch: 下达生产订单
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        回调方向：**必须等于 body.requestNo**，否则 400（code 40002）。
+        去重范围 = (服务身份 sub, requestNo)，保留 ≥ 90 天；不复用用户维度 24h 幂等表。
+      schema: {type: string, minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._:-]+$'}
+      example: MI-WO-20261014-0001-001
+
+  responses:
+    Replayed:
+      description: '幂等重放：同服务身份、同 requestNo、同内容 → 返回首次结果（同一 erpDocumentNo），`replayed=true`，响应头 `Idempotent-Replayed: true`。'
+      headers:
+        Idempotent-Replayed:
+          schema: {type: string, enum: ["true"]}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/RCallbackAck'}
+          examples:
+            replay:
+              value: {code: 0, msg: ok, data: {requestNo: MI-WO-20261014-0001-001, erpDocumentNo: MI-20261014-0088, replayed: true, acceptedAt: "2026-10-14T16:00:01+08:00"}}
+    BadRequest:
+      description: 校验失败或幂等键与 requestNo 不一致。不重试。
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/R'}
+          examples:
+            validation:
+              summary: 字段校验失败
+              value: {code: 400, msg: "quantity: 最多 6 位小数; lines: 不能为空"}
+            keyMissing:
+              summary: 缺少 Idempotency-Key
+              value: {code: 400, msg: "Idempotency-Key 不能为空"}
+            keyMismatch:
+              summary: 请求头与 requestNo 不一致（40002，计划新增）
+              value: {code: 40002, msg: "Idempotency-Key 必须等于 requestNo"}
+            unknownRef:
+              summary: 引用不存在（物料 / 仓库 / 生产订单）
+              value: {code: 400, msg: "物料 RM-UNKNOWN 不存在"}
+    Unauthorized:
+      description: 令牌缺失、签名无效、过期或 aud 不是 erp-api。MES 刷新令牌后重试一次。
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/R'}
+          examples:
+            missingToken: {summary: 未带 Authorization, value: {code: 401, msg: 未登录或登录已失效}}
+            expired: {summary: 令牌过期, value: {code: 401, msg: 未登录或登录已失效}}
+            wrongAudience: {summary: aud 不是 erp-api（如拿用户令牌或 MES 令牌）, value: {code: 401, msg: 未登录或登录已失效}}
+    Forbidden:
+      description: 服务令牌缺少该接口 scope，或用户令牌调用集成接口。不重试。
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/R'}
+          examples:
+            wrongScope: {summary: 缺少对应 scope, value: {code: 403, msg: 无权限}}
+    Busy:
+      description: 取号繁忙（50301），未落库、未占用 requestNo，可原样退避重试。
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/R'}
+          examples:
+            busy: {value: {code: 50301, msg: 取号繁忙，请稍后重试}}
+
+  examples:
+    KeyReused:
+      summary: 同 requestNo 不同内容（40902）
+      value: {code: 40902, msg: 请求号已被使用且参数不一致}
+    InProgress:
+      summary: 同 requestNo 首次请求仍在处理（40904），退避重试
+      value: {code: 40904, msg: 请求处理中，请稍后重试}
+    StateConflict:
+      summary: 生产订单状态不允许（40905，计划新增）
+      value: {code: 40905, msg: "生产订单 MO-20261014-0001 当前状态 CLOSED，不允许该操作", data: {erpProductionOrderNo: MO-20261014-0001, status: CLOSED}}
+
+  schemas:
+    Decimal6:
+      type: string
+      pattern: '^\d{1,12}(\.\d{1,6})?$'
+      description: 非负十进制字符串，最多 6 位小数；ERP 下达时固定输出 6 位（如 "100.000000"）。比较/摘要按数值规范化（1.5 == 1.500000）。
+    R:
+      type: object
+      description: ERP 统一响应体（过渡期保持）。`code=0` 成功；非 0 见 ErrorCode。
+      required: [code, msg]
+      properties:
+        code: {$ref: '#/components/schemas/ErrorCode'}
+        msg: {type: string, description: 人类可读，调用方不得解析。}
+        data: {description: 可选结构化数据。}
+    RCallbackAck:
+      allOf:
+        - $ref: '#/components/schemas/R'
+        - type: object
+          required: [data]
+          properties:
+            code: {const: 0}
+            data: {$ref: '#/components/schemas/CallbackAck'}
+    CallbackAck:
+      type: object
+      required: [requestNo, erpDocumentNo, replayed, acceptedAt]
+      properties:
+        requestNo: {type: string}
+        erpDocumentNo: {type: string, description: ERP 生成的单据号。}
+        replayed: {type: boolean, description: true 表示本次为幂等重放。}
+        acceptedAt: {type: string, format: date-time, description: 首次受理时间（重放时不变）。}
+    ErrorCode:
+      type: integer
+      description: |
+        数字码 ↔ problem type 对照（完整说明见 error-codes.md）。"计划"= 实现 PR 新增。
+        | code | HTTP | problem type | 含义 | MES 重试 |
+        | --- | --- | --- | --- | --- |
+        | 0 | 200/201 | — | 成功 / 重放 | — |
+        | 400 | 400 | validation-error | 参数校验失败、引用不存在 | 否 |
+        | 40002（计划） | 400 | idempotency-key-mismatch | Idempotency-Key ≠ requestNo 或缺失 | 否 |
+        | 401 | 401 | authentication-required | 令牌缺失/无效/过期/aud 不符 | 刷新令牌重试 1 次 |
+        | 403 | 403 | access-denied | scope 不符 | 否 |
+        | 40900 | 409 | concurrent-modification | 并发冲突重试用尽 | 是（退避） |
+        | 40902 | 409 | idempotency-key-conflict | requestNo 已用于不同内容 | 否 |
+        | 40904 | 409 | idempotency-in-progress | 同 requestNo 仍在处理 | 是（退避） |
+        | 40905（计划） | 409 | erp-document-state-conflict | 生产订单状态不允许 | 否 |
+        | 40906（计划） | 409 | material-shortage | 库存不足 | 否 |
+        | 500 | 500 | internal-error | 系统异常 | 是（退避） |
+        | 50301 | 503 | service-busy | 取号繁忙 | 是（退避） |
+      enum: [0, 400, 40002, 401, 403, 40900, 40902, 40904, 40905, 40906, 500, 50301]
+    MaterialIssueLine:
+      type: object
+      required: [lineNo, materialCode, quantity, uom]
+      properties:
+        lineNo: {type: integer, minimum: 1}
+        materialCode: {type: string, maxLength: 128, description: ERP 物料编码。}
+        quantity: {$ref: '#/components/schemas/Decimal6'}
+        uom: {type: string, maxLength: 16}
+        lotNo: {type: [string, 'null'], maxLength: 64}
+    MaterialIssueRequest:
+      type: object
+      required: [requestNo, workOrderNo, erpProductionOrderNo, warehouseCode, occurredAt, lines]
+      properties:
+        requestNo: {type: string, maxLength: 64, description: '幂等请求号，规则 MI-{工单号}-{序号}；= Idempotency-Key。'}
+        workOrderNo: {type: string, maxLength: 64}
+        erpProductionOrderNo: {type: string, maxLength: 64}
+        warehouseCode: {type: string, maxLength: 32}
+        occurredAt: {type: string, format: date-time}
+        lines: {type: array, minItems: 1, items: {$ref: '#/components/schemas/MaterialIssueLine'}}
+    FinishedGoodsReceiptRequest:
+      type: object
+      required: [requestNo, workOrderNo, erpProductionOrderNo, productCode, quantity, uom, warehouseCode, occurredAt]
+      properties:
+        requestNo: {type: string, maxLength: 64, description: 'FGR-{工单号}-{序号}'}
+        workOrderNo: {type: string, maxLength: 64}
+        erpProductionOrderNo: {type: string, maxLength: 64}
+        productCode: {type: string, maxLength: 128}
+        quantity: {$ref: '#/components/schemas/Decimal6'}
+        uom: {type: string, maxLength: 16}
+        warehouseCode: {type: string, maxLength: 32}
+        lotNo: {type: [string, 'null'], maxLength: 64}
+        occurredAt: {type: string, format: date-time}
+    ScrapRequest:
+      type: object
+      required: [requestNo, workOrderNo, erpProductionOrderNo, materialCode, quantity, uom, warehouseCode, reasonCode, occurredAt]
+      properties:
+        requestNo: {type: string, maxLength: 64, description: 'SCR-{工单号}-{工序}-{序号}'}
+        workOrderNo: {type: string, maxLength: 64}
+        erpProductionOrderNo: {type: string, maxLength: 64}
+        materialCode: {type: string, maxLength: 128}
+        quantity: {$ref: '#/components/schemas/Decimal6'}
+        uom: {type: string, maxLength: 16}
+        warehouseCode: {type: string, maxLength: 32, description: '报废出库仓（MES PR 86 无此字段，ERP 定稿新增）。'}
+        reasonCode: {type: string, maxLength: 32, enum: [PROCESS_DEFECT, MATERIAL_DEFECT, EQUIPMENT, OTHER]}
+        operationNo: {type: [string, 'null'], maxLength: 16}
+        occurredAt: {type: string, format: date-time}
+    DispatchProductionOrderRequest:
+      type: object
+      description: ERP→MES 下达请求。ERP 不发送 deviceId。
+      required: [erpProductionOrderNo, productCode, quantity, uom]
+      properties:
+        erpProductionOrderNo: {type: string, maxLength: 64}
+        productCode: {type: string, maxLength: 128}
+        quantity: {$ref: '#/components/schemas/Decimal6'}
+        uom: {type: string, maxLength: 16}
+        plannedStartDate: {type: string, format: date}
+        plannedFinishDate: {type: string, format: date}
+        warehouseCode: {type: string, maxLength: 32, description: 完工入库默认仓。}
+        remark: {type: string, maxLength: 256}
+    DispatchProductionOrderResponse:
+      type: object
+      required: [workOrderNo, erpProductionOrderNo, productCode, quantity, uom, status, createdAt]
+      properties:
+        workOrderNo: {type: string}
+        erpProductionOrderNo: {type: string}
+        productCode: {type: string}
+        quantity: {$ref: '#/components/schemas/Decimal6'}
+        uom: {type: string}
+        status: {type: string, enum: [CREATED]}
+        createdAt: {type: string, format: date-time}
