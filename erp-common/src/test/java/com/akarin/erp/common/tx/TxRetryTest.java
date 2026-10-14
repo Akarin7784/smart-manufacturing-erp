@@ -147,4 +147,31 @@ class TxRetryTest {
                 .isInstanceOf(TransactionSystemException.class);
         assertThat(n).hasValue(1);
     }
+
+    @Test void lockCauseAndKind() {
+        SQLException mysqlDeadlock = new SQLException("deadlock", "40001", 1213);
+        SQLException mysqlTimeout = new SQLException("lock wait timeout", "HY000", 1205);
+        SQLException h2Timeout = new SQLException("timeout", "HYT00", 50200);
+        assertThat((Object) TxRetry.lockCause(uncategorized(mysqlDeadlock))).isSameAs(mysqlDeadlock);
+        assertThat(TxRetry.kind(mysqlDeadlock)).isEqualTo("deadlock");
+        assertThat(TxRetry.kind(mysqlTimeout)).isEqualTo("lock-timeout");
+        assertThat(TxRetry.kind(h2Timeout)).isEqualTo("lock-timeout");
+        assertThat(TxRetry.kind(new SQLException("x", "HYT00", 7))).isEqualTo("lock-timeout");
+        CannotAcquireLockException noSql = new CannotAcquireLockException("timeout");
+        assertThat((Object) TxRetry.lockCause(noSql)).isSameAs(noSql);
+        assertThat(TxRetry.kind(noSql)).isEqualTo("lock-timeout");
+        // Spring 锁异常包着带锁错误码的 SQLException：报更具体的 SQLException
+        assertThat((Object) TxRetry.lockCause(new DeadlockLoserDataAccessException("dl", mysqlDeadlock))).isSameAs(mysqlDeadlock);
+        // Spring 锁异常包着无锁错误码的 SQLException：报 Spring 异常本身
+        DeadlockLoserDataAccessException dl = new DeadlockLoserDataAccessException("dl", new SQLException("x", "HY000", 1));
+        assertThat((Object) TxRetry.lockCause(dl)).isSameAs(dl);
+        assertThat((Object) TxRetry.sqlCause(new RuntimeException("no sql"))).isNull();
+    }
+
+    @Test void bareRollbackFailureWithSqlCauseNotRetried() {
+        AtomicInteger n = new AtomicInteger();
+        TransactionSystemException t = new TransactionSystemException("JDBC rollback failed", new SQLException("broken", "08S01", 0));
+        assertThatThrownBy(() -> retry.run("t", () -> { n.incrementAndGet(); throw t; })).isSameAs(t);
+        assertThat(n).hasValue(1);
+    }
 }

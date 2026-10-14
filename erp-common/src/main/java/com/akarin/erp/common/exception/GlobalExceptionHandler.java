@@ -94,6 +94,17 @@ public class GlobalExceptionHandler {
         return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
     }
 
+    /** 回滚/提交本身失败且没有可用的原始异常（TxRetry 已判定不是锁冲突）：500，简短 ERROR，不带 SQL 与堆栈 */
+    @ExceptionHandler(org.springframework.transaction.TransactionSystemException.class)
+    public ResponseEntity<R<Void>> txSystem(org.springframework.transaction.TransactionSystemException e) {
+        java.sql.SQLException s = null;
+        for (Throwable t = e; t != null && s == null; t = t.getCause() == t ? null : t.getCause())
+            if (t instanceof java.sql.SQLException x) s = x;
+        log.error("transaction system error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> other(Exception e) {
         log.error("unexpected", e);

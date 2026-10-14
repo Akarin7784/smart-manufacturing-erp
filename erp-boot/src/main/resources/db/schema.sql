@@ -281,3 +281,8 @@ CREATE TABLE IF NOT EXISTS fin_settlement (
   deleted TINYINT DEFAULT 0,
   INDEX idx_settlement_bill (bill_id)
 );
+-- 单据号序列（#18 a）：seq_key = 前缀 + yyyyMMdd，val 原子递增；多实例共用，保证单据号全局唯一
+CREATE TABLE IF NOT EXISTS sys_doc_seq (
+  seq_key VARCHAR(64) NOT NULL PRIMARY KEY,
+  val BIGINT NOT NULL
+);
