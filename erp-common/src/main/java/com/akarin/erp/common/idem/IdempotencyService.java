@@ -80,8 +80,9 @@ public class IdempotencyService {
         this.lease = Duration.ofSeconds(leaseSeconds);
     }
 
-    record Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt, LocalDateTime leaseUntil) {
-        Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt) { this(id, hash, status, resultId, expiresAt, null); }
+    /** leaseValid：按数据库时钟 lease_until > LOCALTIMESTAMP */
+    record Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt, LocalDateTime leaseUntil, boolean leaseValid) {
+        Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt) { this(id, hash, status, resultId, expiresAt, null, false); }
     }
 
     /** 已认领的记录：行 id + 本次请求的持有者令牌（完成 / 释放都带令牌，被接管后原请求改不动记录） */
@@ -104,7 +105,7 @@ public class IdempotencyService {
         String hash = hash(op, req);
         for (int round = 0; ; round++) {
             Claim claimed = tryClaim(user, key, hash);
-            if (claimed != null) return runClaimed(claimed, user, key, docTable, work, idOf, load);
+            if (claimed != null) return runClaimed(claimed, user, key, hash, docTable, work, idOf, load);
             Row r = find(user, key);
             if (r == null) { if (round < 3) continue; throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS); }
             if (r.expiresAt().isBefore(now())) {
@@ -121,11 +122,10 @@ public class IdempotencyService {
             }
             if (!r.hash().equals(hash)) throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency-Key 已被使用且参数不一致");
             if (DONE.equals(r.status()) && r.resultId() != null) return load.apply(r.resultId());
-            // PROCESSING
-            LocalDateTime now = now();
-            if (r.leaseUntil() != null && r.leaseUntil().isAfter(now)) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
-            // 租期已过：原请求可能崩溃，也可能只是慢。先查单据是否已提交（单据与 (用户, key) 同事务写入）
-            Long docId = findDocument(docTable, user, key);
+            // PROCESSING：租期按数据库时钟判断（多实例 JVM 时钟可能不一致）
+            if (r.leaseValid()) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
+            // 租期已过：原请求可能崩溃，也可能只是慢。先查单据是否已提交（单据与 (用户, key, 参数摘要) 同事务写入）
+            Long docId = replayableDocument(docTable, user, key, hash);
             if (docId != null) {
                 jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ? AND status = ?", DONE, docId, r.id(), PROCESSING);
                 log.info("idempotency lease expired, document already committed: rowId={} docId={}", r.id(), docId);
@@ -133,38 +133,72 @@ public class IdempotencyService {
             }
             // 没有单据：条件更新接管（只有一个请求能把过期租期改成新租期）
             String token = java.util.UUID.randomUUID().toString();
-            int taken = jdbc.update("UPDATE sys_idempotency SET owner_token = ?, lease_until = ? WHERE id = ? AND status = ? "
-                            + "AND (lease_until < ? OR (lease_until IS NULL AND created_at < ?))",
-                    token, Timestamp.valueOf(now.plus(lease)), r.id(), PROCESSING, Timestamp.valueOf(now), Timestamp.valueOf(now.minus(lease)));
+            // lease_until 用数据库时钟；旧记录（lease_until 为空）按 created_at（应用写入）+ 租期，在 find 里已算好
+            int taken = jdbc.update("UPDATE sys_idempotency SET owner_token = ?, lease_until = TIMESTAMPADD(SECOND, ?, LOCALTIMESTAMP) "
+                            + "WHERE id = ? AND status = ? AND (lease_until < LOCALTIMESTAMP OR (lease_until IS NULL AND created_at < ?))",
+                    token, lease.getSeconds(), r.id(), PROCESSING, Timestamp.valueOf(now().minus(lease)));
             if (taken == 1) {
                 log.warn("idempotency lease expired, taking over: rowId={}", r.id());
-                return runClaimed(new Claim(r.id(), token), user, key, docTable, work, idOf, load);
+                return runClaimed(new Claim(r.id(), token), user, key, hash, docTable, work, idOf, load);
             }
             if (round >= 3) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
         }
     }
 
-    /** 单据表里 (idem_user, idem_key) 对应的单据 id；表名只来自代码里的常量 */
-    Long findDocument(String docTable, String user, String key) {
-        if (!DOC_TABLES.contains(docTable)) throw new IllegalArgumentException("unknown doc table " + docTable);
-        List<Long> ids = jdbc.queryForList("SELECT id FROM " + docTable + " WHERE idem_user = ? AND idem_key = ?", Long.class, user, key);
-        return ids.isEmpty() ? null : ids.get(0);
+    /**
+     * 单据表里 (idem_user, idem_key) 对应、可以重放的单据 id；没有返回 null。
+     * 单据上的参数摘要（idem_hash）与本次不同 → 409/40902：幂等记录被清理（24h）后同 key 换参数复用，不能重放旧单据。
+     * 表名只来自代码里的常量。
+     */
+    Long replayableDocument(String docTable, String user, String key, String hash) {
+        if (!DOC_UNIQUE.containsKey(docTable)) throw new IllegalArgumentException("unknown doc table " + docTable);
+        List<Map<String, Object>> rows = jdbc.queryForList("SELECT id, idem_hash FROM " + docTable + " WHERE idem_user = ? AND idem_key = ?", user, key);
+        if (rows.isEmpty()) return null;
+        Map<String, Object> row = rows.get(0);
+        Object h = row.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase("idem_hash")).map(Map.Entry::getValue).findFirst().orElse(null);
+        Object id = row.entrySet().stream().filter(e -> e.getKey().equalsIgnoreCase("id")).map(Map.Entry::getValue).findFirst().orElseThrow();
+        if (h == null || !hash.equals(h.toString().trim()))
+            throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency-Key 已被使用且参数不一致");
+        return ((Number) id).longValue();
     }
 
-    public static final java.util.Set<String> DOC_TABLES = java.util.Set.of("pur_order", "sal_order", "inv_stock_txn", "fin_payment");
+    /** 单据表 → 其 (idem_user, idem_key) 唯一约束名 */
+    public static final Map<String, String> DOC_UNIQUE = Map.of(
+            "pur_order", "uk_pur_idem", "sal_order", "uk_sal_idem", "inv_stock_txn", "uk_txn_idem", "fin_payment", "uk_pay_idem");
 
-    private <T> T runClaimed(Claim c, String user, String key, String docTable, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
+    /** 是否撞的是该单据表的幂等键唯一约束（只有这种才按“对方已提交”重放；其他唯一冲突照常抛出） */
+    static boolean isIdemUniqueViolation(Throwable e, String constraint) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof org.springframework.dao.DuplicateKeyException || t instanceof java.sql.SQLIntegrityConstraintViolationException
+                    || (t instanceof java.sql.SQLException s && "23505".equals(s.getSQLState()))) {
+                for (Throwable u = t; u != null; u = u.getCause() == u ? null : u.getCause())
+                    if (u.getMessage() != null && u.getMessage().toLowerCase(java.util.Locale.ROOT).contains(constraint)) return true;
+            }
+        }
+        return false;
+    }
+
+    private <T> T runClaimed(Claim c, String user, String key, String hash, String docTable, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
         T result;
         try {
-            result = IdemContext.with(user, key, work);
+            result = IdemContext.with(user, key, hash, work);
         } catch (RuntimeException | Error e) {
             // 单据上 (idem_user, idem_key) 唯一：慢的原请求与接管者并发时，后提交的一方在这里撞唯一键回滚。
-            // 失败后先看同 key 的单据是否已由另一方提交：是 → 补 DONE 并返回同一张单据
-            Long docId = null;
-            try { docId = findDocument(docTable, user, key); } catch (RuntimeException ignore) { /* 按原异常处理 */ }
-            if (docId != null) {
-                markDone(c, docId, true);
-                return load.apply(docId);
+            // 只有撞的是本单据表的幂等键约束，才去查对方已提交的单据并（参数一致时）重放；其他错误释放占位后照常抛出
+            String constraint = DOC_UNIQUE.get(docTable);
+            if (isIdemUniqueViolation(e, constraint)) {
+                log.warn("idempotency unique violation on {}: rowId={}", constraint, c.rowId());
+                Long docId;
+                try {
+                    docId = replayableDocument(docTable, user, key, hash);
+                } catch (BizException mismatch) {
+                    release(c);
+                    throw mismatch;   // 40902：同 key 的单据参数不同
+                }
+                if (docId != null) {
+                    markDone(c, docId, true);
+                    return load.apply(docId);
+                }
             }
             release(c);
             throw e;
@@ -201,11 +235,11 @@ public class IdempotencyService {
         GeneratedKeyHolder kh = new GeneratedKeyHolder();
         try {
             jdbc.update(c -> {
-                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) VALUES (?, ?, ?, ?, ?, ?, ?, TIMESTAMPADD(SECOND, ?, LOCALTIMESTAMP))",
                         Statement.RETURN_GENERATED_KEYS);
                 ps.setString(1, user); ps.setString(2, key); ps.setString(3, hash); ps.setString(4, PROCESSING);
                 ps.setTimestamp(5, Timestamp.valueOf(now)); ps.setTimestamp(6, Timestamp.valueOf(now.plus(TTL)));
-                ps.setString(7, token); ps.setTimestamp(8, Timestamp.valueOf(now.plus(lease)));
+                ps.setString(7, token); ps.setLong(8, lease.getSeconds());
                 return ps;
             }, kh);
         } catch (DuplicateKeyException e) {
@@ -217,10 +251,10 @@ public class IdempotencyService {
     }
 
     private Row find(String user, String key) {
-        List<Row> l = jdbc.query("SELECT id, req_hash, status, result_id, expires_at, lease_until FROM sys_idempotency WHERE user_name = ? AND idem_key = ?",
+        List<Row> l = jdbc.query("SELECT id, req_hash, status, result_id, expires_at, lease_until, CASE WHEN lease_until > LOCALTIMESTAMP THEN 1 ELSE 0 END FROM sys_idempotency WHERE user_name = ? AND idem_key = ?",
                 (rs, i) -> new Row(rs.getLong(1), rs.getString(2), rs.getString(3),
                         rs.getObject(4) == null ? null : rs.getLong(4), rs.getTimestamp(5).toLocalDateTime(),
-                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toLocalDateTime()), user, key);
+                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toLocalDateTime(), rs.getInt(7) == 1), user, key);
         return l.isEmpty() ? null : l.get(0);
     }
 

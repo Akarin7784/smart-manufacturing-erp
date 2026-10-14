@@ -178,6 +178,7 @@ CREATE TABLE IF NOT EXISTS inv_stock_txn (
   created_by VARCHAR(64),
   idem_user VARCHAR(64),
   idem_key VARCHAR(128),
+  idem_hash CHAR(64),
   UNIQUE KEY uk_txn_idem (idem_user, idem_key),
   deleted TINYINT DEFAULT 0
 );
@@ -195,6 +196,7 @@ CREATE TABLE IF NOT EXISTS pur_order (
   created_by VARCHAR(64),
   idem_user VARCHAR(64),
   idem_key VARCHAR(128),
+  idem_hash CHAR(64),
   UNIQUE KEY uk_pur_idem (idem_user, idem_key),
   version INT NOT NULL DEFAULT 0,
   deleted TINYINT DEFAULT 0
@@ -225,6 +227,7 @@ CREATE TABLE IF NOT EXISTS sal_order (
   created_by VARCHAR(64),
   idem_user VARCHAR(64),
   idem_key VARCHAR(128),
+  idem_hash CHAR(64),
   UNIQUE KEY uk_sal_idem (idem_user, idem_key),
   version INT NOT NULL DEFAULT 0,
   deleted TINYINT DEFAULT 0
@@ -277,6 +280,7 @@ CREATE TABLE IF NOT EXISTS fin_payment (
   created_by VARCHAR(64),
   idem_user VARCHAR(64),
   idem_key VARCHAR(128),
+  idem_hash CHAR(64),
   UNIQUE KEY uk_pay_idem (idem_user, idem_key),
   deleted TINYINT DEFAULT 0,
   INDEX idx_payment_partner (partner_id)
@@ -304,9 +308,9 @@ CREATE TABLE IF NOT EXISTS sys_idempotency (
   created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL, owner_token VARCHAR(64), lease_until DATETIME,
   UNIQUE KEY uk_idem_user_key (user_name, idem_key), INDEX idx_idem_expires (expires_at));
 
--- #22-9：已有 MySQL 库补幂等键列（启动时用 ApplicationRunner 执行，CREATE TABLE IF NOT EXISTS 不会改已有表）
--- ALTER TABLE pur_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key);
--- ALTER TABLE sal_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_sal_idem (idem_user, idem_key);
--- ALTER TABLE inv_stock_txn ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_txn_idem (idem_user, idem_key);
--- ALTER TABLE fin_payment ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pay_idem (idem_user, idem_key);
+-- #22-9：已有 MySQL 库补幂等键列（启动时由 SchemaUpgrade 在 Web 服务接流量前执行，CREATE TABLE IF NOT EXISTS 不会改已有表）
+-- ALTER TABLE pur_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key);
+-- ALTER TABLE sal_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_sal_idem (idem_user, idem_key);
+-- ALTER TABLE inv_stock_txn ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_txn_idem (idem_user, idem_key);
+-- ALTER TABLE fin_payment ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_pay_idem (idem_user, idem_key);
 -- ALTER TABLE sys_idempotency ADD COLUMN owner_token VARCHAR(64), ADD COLUMN lease_until DATETIME;

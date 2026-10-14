@@ -41,12 +41,26 @@ public class InventoryService {
 
     @Transactional
     public StockTxn stockIn(Long materialId, Long warehouseId, BigDecimal qty, String bizType, String bizNo, String remark) {
-        return change("IN", materialId, warehouseId, qty, bizType, bizNo, remark);
+        return change("IN", materialId, warehouseId, qty, bizType, bizNo, remark, null);
     }
 
     @Transactional
     public StockTxn stockOut(Long materialId, Long warehouseId, BigDecimal qty, String bizType, String bizNo, String remark) {
-        return change("OUT", materialId, warehouseId, qty, bizType, bizNo, remark);
+        return change("OUT", materialId, warehouseId, qty, bizType, bizNo, remark, null);
+    }
+
+    /**
+     * 手工出入库：这条流水本身就是单据，幂等键由调用方显式传入（可为 null）。
+     * 采购收货 / 销售发货生成的流水走 {@link #stockInAll} / {@link #stockOutAll}，不带幂等键（多行不会撞 uk_txn_idem）。
+     */
+    @Transactional
+    public StockTxn manualIn(Long materialId, Long warehouseId, BigDecimal qty, String remark, com.akarin.erp.common.idem.IdemContext.Key idem) {
+        return change("IN", materialId, warehouseId, qty, "MANUAL", null, remark, idem);
+    }
+
+    @Transactional
+    public StockTxn manualOut(Long materialId, Long warehouseId, BigDecimal qty, String remark, com.akarin.erp.common.idem.IdemContext.Key idem) {
+        return change("OUT", materialId, warehouseId, qty, "MANUAL", null, remark, idem);
     }
 
     /** 一条库存变动：物料 + 仓库 + 数量 */
@@ -83,12 +97,12 @@ public class InventoryService {
     private List<StockTxn> applyAll(String dir, List<StockLine> lines, String bizType, String bizNo) {
         List<StockTxn> out = new ArrayList<>();
         for (StockLine l : mergeAndSort(lines))
-            out.add(change(dir, l.materialId(), l.warehouseId(), l.qty(), bizType, bizNo, null));
+            out.add(change(dir, l.materialId(), l.warehouseId(), l.qty(), bizType, bizNo, null, null));
         return out;
     }
 
     private StockTxn change(String dir, Long materialId, Long warehouseId, BigDecimal qty,
-                            String bizType, String bizNo, String remark) {
+                            String bizType, String bizNo, String remark, com.akarin.erp.common.idem.IdemContext.Key idem) {
         if (qty == null || qty.signum() <= 0) throw new BizException("数量必须大于 0");
         materialService.requireRef(materialId);
         warehouseService.requireRef(warehouseId);
@@ -111,7 +125,7 @@ public class InventoryService {
         t.setDirection(dir); t.setMaterialId(materialId); t.setWarehouseId(warehouseId);
         t.setQty(qty); t.setBalanceAfter(after);
         t.setBizType(bizType == null ? "MANUAL" : bizType); t.setBizNo(bizNo); t.setRemark(remark);
-        com.akarin.erp.common.idem.IdemContext.apply((u, k) -> { t.setIdemUser(u); t.setIdemKey(k); });
+        if (idem != null) { t.setIdemUser(idem.user()); t.setIdemKey(idem.key()); t.setIdemHash(idem.hash()); }
         txnMapper.insert(t);
         return t;
     }

@@ -333,7 +333,12 @@ mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率�
   1. 先按单据上的 `(idem_user, idem_key)` 查是否已有提交的单据——有则把记录补成 DONE 并重放（单据与幂等键同事务写入，崩溃也不会丢）；
   2. 没有则条件更新接管（只改过期租期，只有一个请求能改到），再创建。
   慢但还活着的原请求与接管者并发时，单据表 `UNIQUE (idem_user, idem_key)` 保证只落一张；后提交的一方撞唯一键回滚，查到已提交的单据后重放同一张。
-- 单据列 `idem_user` / `idem_key`（采购单、销售单、库存流水、收付款）：未带 `Idempotency-Key` 时为 null（唯一索引允许多个 null）。已有 MySQL 库由启动时的 `SchemaUpgrade` 自动 `ADD COLUMN` / `ADD UNIQUE KEY`（幂等），README 也给了手工 DDL。
+  租期 `lease_until` 用**数据库时钟**计算与比较（`LOCALTIMESTAMP`），不依赖各实例 JVM 时钟/时区。处理时间超过租期（默认 60 秒）的慢请求会被同 key 的重试接管；此时由单据唯一键 + 请求摘要保证不重复建单。
+- 单据上同时存 `idem_hash`（请求摘要）。从单据重放前（过期查单、或撞 `uk_*_idem` 唯一键）都会比对摘要：不一致返回 **409 / 40902**。因此 `sys_idempotency` 记录被 24h 清理后，同 key **换参数**仍是 40902，**同参数**重放原单据。早于本版本、没有摘要的旧单据按不一致处理（40902）。
+- 只有撞 `uk_pur_idem` / `uk_sal_idem` / `uk_txn_idem` / `uk_pay_idem` 才走重放（日志 WARN 记录约束名），其他唯一冲突和错误照常抛出。
+- 幂等键只写在单据头（采购单、销售单、收付款、手工出入库流水）；收货/发货等多行单据生成的库存流水不带键。
+- 单据列 `idem_user` / `idem_key`（采购单、销售单、库存流水、收付款）：未带 `Idempotency-Key` 时为 null（唯一索引允许多个 null）。已有 MySQL 库由启动时的 `SchemaUpgrade` 自动 `ADD COLUMN` / `ADD UNIQUE KEY`（幂等），它在 Web 服务器开始接收请求**之前**执行。
+- **发布说明**：多实例滚动发布时，请先**手工执行下面的 ALTER DDL**，再滚动替换实例（避免旧实例在加列过程中接流量、或多个新实例同时改表）。
 - 核销接口的 `requestNo` 幂等不变。
 
 已有 MySQL 库手工建表 / 补列（启动时 `SchemaUpgrade` 也会幂等执行）：
@@ -344,10 +349,10 @@ CREATE TABLE IF NOT EXISTS sys_idempotency (
   created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL, owner_token VARCHAR(64), lease_until DATETIME,
   UNIQUE KEY uk_idem_user_key (user_name, idem_key), INDEX idx_idem_expires (expires_at));
 ALTER TABLE sys_idempotency ADD COLUMN owner_token VARCHAR(64), ADD COLUMN lease_until DATETIME; -- 已有表
-ALTER TABLE pur_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key);
-ALTER TABLE sal_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_sal_idem (idem_user, idem_key);
-ALTER TABLE inv_stock_txn ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_txn_idem (idem_user, idem_key);
-ALTER TABLE fin_payment ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pay_idem (idem_user, idem_key);
+ALTER TABLE pur_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key);
+ALTER TABLE sal_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_sal_idem (idem_user, idem_key);
+ALTER TABLE inv_stock_txn ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_txn_idem (idem_user, idem_key);
+ALTER TABLE fin_payment ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD COLUMN idem_hash CHAR(64), ADD UNIQUE KEY uk_pay_idem (idem_user, idem_key);
 ```
 
 **日志**：回滚失败且没有原始异常时，整个请求只记一条简短 ERROR（TxRetry 记过的，全局处理器不再记）；堆栈只在 `GlobalExceptionHandler` 的 DEBUG 级别输出。

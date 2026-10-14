@@ -20,6 +20,8 @@ public class SalesOrder extends BaseEntity {
     /** 幂等键：与 Idempotency-Key 同事务写入；UNIQUE(idem_user, idem_key)，未带请求头时为 null */
     private String idemUser;
     private String idemKey;
+    /** 请求参数摘要：幂等记录清理后同 key 换参数复用时据此返回 40902，而不是重放旧单据 */
+    private String idemHash;
     @com.baomidou.mybatisplus.annotation.Version
     private Integer version;
 }

@@ -53,7 +53,7 @@ public class InventoryController {
             service.validateChange(r.materialId(), r.warehouseId(), r.qty());
             return txRetry.run("inventory.in", com.akarin.erp.common.util.NoGenerator.reserved(
                     java.util.Map.of(InventoryService.TXN_PREFIX_IN, 1),
-                    () -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+                    () -> service.manualIn(r.materialId(), r.warehouseId(), r.qty(), r.remark(), com.akarin.erp.common.idem.IdemContext.current())));
         }, StockTxn::getId, txnMapper::selectById));
     }
 
@@ -65,7 +65,7 @@ public class InventoryController {
             service.validateChange(r.materialId(), r.warehouseId(), r.qty());
             return txRetry.run("inventory.out", com.akarin.erp.common.util.NoGenerator.reserved(
                     java.util.Map.of(InventoryService.TXN_PREFIX_OUT, 1),
-                    () -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+                    () -> service.manualOut(r.materialId(), r.warehouseId(), r.qty(), r.remark(), com.akarin.erp.common.idem.IdemContext.current())));
         }, StockTxn::getId, txnMapper::selectById));
     }
 }

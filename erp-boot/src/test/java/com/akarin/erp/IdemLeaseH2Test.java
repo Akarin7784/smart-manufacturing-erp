@@ -14,4 +14,6 @@ class IdemLeaseH2Test extends IdemLeaseSupport {
     @Test void documentUniqueConstraint() throws Exception { documentUniqueConstraintBlocksSecondInsert(); }
     @Test void crashThenLeaseCreatesOne() throws Exception { crashThenLeaseExpiredCreatesOne(); }
     @Test void slowOriginalAndTakeover() throws Exception { slowOriginalAndTakeoverOneDocument(); }
+    @Test void purgedKeyReuse() throws Exception { purgedKeyReusedDifferentParamsIs40902SameParamsReplays(); }
+    @Test void multiLineMovements() throws Exception { multiLineMovementsInsideIdemContextDoNotCollide(); }
 }

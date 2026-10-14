@@ -14,12 +14,12 @@ class IdemLeaseMySqlTest extends IdemLeaseSupport {
 
     /** 已有库升级：去掉列与唯一键后，启动补丁（SchemaUpgrade）把它们加回来；再跑一次不报错（幂等） */
     @Test void schemaUpgradeAddsMissingColumnsIdempotently() {
-        jdbc.execute("ALTER TABLE fin_payment DROP INDEX uk_pay_idem, DROP COLUMN idem_user, DROP COLUMN idem_key");
+        jdbc.execute("ALTER TABLE fin_payment DROP INDEX uk_pay_idem, DROP COLUMN idem_user, DROP COLUMN idem_key, DROP COLUMN idem_hash");
         jdbc.execute("ALTER TABLE sys_idempotency DROP COLUMN owner_token, DROP COLUMN lease_until");
-        upgrade.run(null);
-        upgrade.run(null);
+        upgrade.upgrade();
+        upgrade.upgrade();
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='fin_payment' AND COLUMN_NAME IN ('idem_user','idem_key')", Integer.class)).isEqualTo(2);
+                "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='fin_payment' AND COLUMN_NAME IN ('idem_user','idem_key','idem_hash')", Integer.class)).isEqualTo(3);
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
                 "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME='fin_payment' AND INDEX_NAME='uk_pay_idem' AND NON_UNIQUE=0", Integer.class)).isEqualTo(1);
         org.assertj.core.api.Assertions.assertThat(jdbc.queryForObject(
@@ -32,4 +32,6 @@ class IdemLeaseMySqlTest extends IdemLeaseSupport {
     @Test void documentUniqueConstraint() throws Exception { documentUniqueConstraintBlocksSecondInsert(); }
     @Test void crashThenLeaseCreatesOne() throws Exception { crashThenLeaseExpiredCreatesOne(); }
     @Test void slowOriginalAndTakeover() throws Exception { slowOriginalAndTakeoverOneDocument(); }
+    @Test void purgedKeyReuse() throws Exception { purgedKeyReusedDifferentParamsIs40902SameParamsReplays(); }
+    @Test void multiLineMovements() throws Exception { multiLineMovementsInsideIdemContextDoNotCollide(); }
 }

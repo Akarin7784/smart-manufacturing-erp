@@ -60,14 +60,14 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
         String hash = IdempotencyService.hash("purchase.order.create", req);
         // 模拟：业务事务已提交，但 mark-done 失败 / 进程崩溃
-        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, created_by, version, deleted, idem_user, idem_key) "
-                        + "VALUES (?, ?, ?, 'DRAFT', 2, ?, 'admin', 0, 0, 'admin', ?)",
-                "PO-LEASE-" + remark, supplier, warehouse, remark, key);
+        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, created_by, version, deleted, idem_user, idem_key, idem_hash) "
+                        + "VALUES (?, ?, ?, 'DRAFT', 2, ?, 'admin', 0, 0, 'admin', ?, ?)",
+                "PO-LEASE-" + remark, supplier, warehouse, remark, key, hash);
         long docId = jdbc.queryForObject("SELECT id FROM pur_order WHERE remark=?", Long.class, remark);
         LocalDateTime n = now();
         jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, result_id, created_at, expires_at, owner_token, lease_until) "
-                        + "VALUES ('admin', ?, ?, 'PROCESSING', NULL, ?, ?, 'dead-token', ?)",
-                key, hash, Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(5)));
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', NULL, ?, ?, 'dead-token', TIMESTAMPADD(SECOND, -5, LOCALTIMESTAMP))",
+                key, hash, Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)));
         Res r = post2(admin, "/api/purchase/orders", po(remark), key);
         assertThat(r.code()).isZero();
         assertThat(r.data().path("order").path("id").asLong()).isEqualTo(docId);
@@ -84,9 +84,9 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
         LocalDateTime n = now();
         jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
-                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'alive', ?)",
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'alive', TIMESTAMPADD(SECOND, 60, LOCALTIMESTAMP))",
                 key, IdempotencyService.hash("purchase.order.create", req),
-                Timestamp.valueOf(n), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.plusSeconds(60)));
+                Timestamp.valueOf(n), Timestamp.valueOf(n.plusHours(24)));
         Res r = post2(admin, "/api/purchase/orders", po(remark), key);
         assertThat(r.status() + "/" + r.code()).isEqualTo("409/40904");
         assertThat(poCount(remark)).isZero();
@@ -99,9 +99,9 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
         LocalDateTime n = now();
         jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
-                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'old', ?)",
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'old', TIMESTAMPADD(SECOND, -5, LOCALTIMESTAMP))",
                 key, IdempotencyService.hash("purchase.order.create", req),
-                Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(5)));
+                Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)));
         ExecutorService ex = Executors.newFixedThreadPool(2);
         CountDownLatch go = new CountDownLatch(1);
         List<Future<Res>> fs = List.of(
@@ -149,12 +149,15 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
         LocalDateTime n = now();
         jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
-                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'crashed', ?)",
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'crashed', TIMESTAMPADD(SECOND, -30, LOCALTIMESTAMP))",
                 key, IdempotencyService.hash("purchase.order.create", req),
-                Timestamp.valueOf(n.minusMinutes(5)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(30)));
+                Timestamp.valueOf(n.minusMinutes(5)), Timestamp.valueOf(n.plusHours(24)));
         Res r = post2(admin, "/api/purchase/orders", po(remark), key);
         assertThat(r.code()).isZero();
         assertThat(poCount(remark)).isEqualTo(1);
+        // 接管时 lease_until 用数据库时钟写入：≈ LOCALTIMESTAMP + 租期（2s），与 JVM 时区/时钟无关
+        Long diff = jdbc.queryForObject("SELECT TIMESTAMPDIFF(SECOND, LOCALTIMESTAMP, lease_until) FROM sys_idempotency WHERE idem_key=?", Long.class, key);
+        assertThat(diff).isBetween(-3L, 3L);
         Res r2 = post2(admin, "/api/purchase/orders", po(remark), key);
         assertThat(r2.data().path("order").path("id").asLong()).isEqualTo(r.data().path("order").path("id").asLong());
     }
@@ -180,7 +183,7 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
                 ps.setLong(1, material); ps.setLong(2, warehouse); ps.executeQuery().close();
             }
             Future<Res> fa = ex.submit(() -> post2(admin, "/api/inventory/in", in, key));
-            Thread.sleep(2600);   // 租期 2s 已过，A 仍卡着
+            Thread.sleep(3300);   // 租期 2s 已过（MySQL DATETIME 精度到秒，多留 1s），A 仍卡着
             Map<String, Object> rec = jdbc.queryForMap("SELECT status, owner_token FROM sys_idempotency WHERE idem_key=?", key);
             assertThat(rec.get("status")).as("A 仍在处理").isEqualTo("PROCESSING");
             String tokenA = (String) rec.get("owner_token");
@@ -198,5 +201,54 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
         assertThat(new java.math.BigDecimal(jdbc.queryForObject("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=?", String.class, material, warehouse)))
                 .as("库存只 +1").isEqualByComparingTo("11");
         assertThat(jdbc.queryForObject("SELECT status FROM sys_idempotency WHERE idem_key=?", String.class, key)).isEqualTo("DONE");
+    }
+
+    /** BLOCKER：幂等记录已清理（24h）后，同 key 换参数 → 409/40902（不重放旧单据）；同参数 → 重放原单据 */
+    void purgedKeyReusedDifferentParamsIs40902SameParamsReplays() throws Exception {
+        setUpRefs();
+        String remark = uniq("pg"), key = "lease-pg-" + remark;
+        Res first = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(first.code()).isZero();
+        long id = first.data().path("order").path("id").asLong();
+        jdbc.update("DELETE FROM sys_idempotency WHERE idem_key=?", key);   // 模拟 24h 后被清理
+        String other = po(remark).replace("\"qty\":\"1\"", "\"qty\":\"9\"");
+        Res diff = post2(admin, "/api/purchase/orders", other, key);
+        assertThat(diff.status() + "/" + diff.code()).isEqualTo("409/40902");
+        assertThat(poCount(remark)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_idempotency WHERE idem_key=?", Integer.class, key)).as("40902 时占位已释放").isZero();
+        Res same = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(same.code()).isZero();
+        assertThat(same.data().path("order").path("id").asLong()).isEqualTo(id);
+        assertThat(poCount(remark)).isEqualTo(1);
+        // 租期过期后的查单路径同样比对摘要：伪造一条过期的 PROCESSING（参数 B），单据是参数 A → 40902
+        jdbc.update("DELETE FROM sys_idempotency WHERE idem_key=?", key);
+        Object reqB = om.readValue(other, com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
+        LocalDateTime n = now();
+        jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'x', TIMESTAMPADD(SECOND, -5, LOCALTIMESTAMP))",
+                key, IdempotencyService.hash("purchase.order.create", reqB), Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)));
+        Res reclaim = post2(admin, "/api/purchase/orders", other, key);
+        assertThat(reclaim.status() + "/" + reclaim.code()).isEqualTo("409/40902");
+        assertThat(poCount(remark)).isEqualTo(1);
+    }
+
+    @Autowired com.akarin.erp.inventory.service.InventoryService inventoryService;
+
+    /** 多行单据：在幂等上下文里生成多条流水（收货 / 发货），流水不带幂等键，不会撞 uk_txn_idem */
+    void multiLineMovementsInsideIdemContextDoNotCollide() throws Exception {
+        setUpRefs();
+        long mat2 = mdm(admin, "materials", "LM2");
+        String tag = uniq("ml");
+        var lines = List.of(
+                new com.akarin.erp.inventory.service.InventoryService.StockLine(material, warehouse, new java.math.BigDecimal("1")),
+                new com.akarin.erp.inventory.service.InventoryService.StockLine(mat2, warehouse, new java.math.BigDecimal("2")));
+        var txns = com.akarin.erp.common.idem.IdemContext.with("admin", "ml-" + tag, "h", () -> inventoryService.stockInAll(lines, "PURCHASE_RECEIPT", "PO-" + tag));
+        assertThat(txns).hasSize(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM inv_stock_txn WHERE biz_no=? AND idem_key IS NULL", Integer.class, "PO-" + tag)).isEqualTo(2);
+        // 端到端：两种物料的采购单收货
+        String poBody = "{\"supplierId\":" + supplier + ",\"warehouseId\":" + warehouse + ",\"remark\":\"" + tag
+                + "\",\"items\":[{\"materialId\":" + material + ",\"qty\":\"1\",\"price\":\"1\"},{\"materialId\":" + mat2 + ",\"qty\":\"1\",\"price\":\"1\"}]}";
+        Res po = post2(admin, "/api/purchase/orders", poBody, "ml-po-" + tag);
+        assertThat(po.code()).isZero();
     }
 }
