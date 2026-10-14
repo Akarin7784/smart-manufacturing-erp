@@ -8,4 +8,6 @@ public interface MasterData {
     void setCode(String code);
     Integer getStatus();
     void setStatus(Integer status);
+    Integer getVersion();
+    void setVersion(Integer version);
 }

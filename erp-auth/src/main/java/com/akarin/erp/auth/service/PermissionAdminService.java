@@ -31,7 +31,7 @@ public class PermissionAdminService {
         if (permissionMapper.countByCodeIncludingDeleted(req.code()) > 0)
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + req.code());
         SysPermission p = new SysPermission();
-        p.setCode(req.code()); p.setName(req.name());
+        p.setCode(req.code()); p.setName(req.name()); p.setVersion(0);
         try {
             permissionMapper.insert(p);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -44,9 +44,15 @@ public class PermissionAdminService {
     public SysPermission update(Long id, CodeNameReq req) {
         SysPermission p = require(id);
         if (req.code() != null && !p.getCode().equals(req.code())) throw new BizException("权限点编码不可修改");   // 不传 = 不改
-        p.setName(req.name());
-        permissionMapper.updateById(p);
-        return p;
+        com.akarin.erp.common.util.Versions.requirePresent(req.version());
+        // 只更新可编辑字段（name），WHERE id + 客户端 version，不整行写回
+        com.akarin.erp.common.util.Versions.requireOneRow(permissionMapper.update(null,
+                new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<SysPermission>()
+                        .eq(SysPermission::getId, id).eq(SysPermission::getVersion, req.version())
+                        .set(SysPermission::getName, req.name())
+                        .set(SysPermission::getUpdatedAt, java.time.LocalDateTime.now())
+                        .setSql("version = version + 1")));
+        return require(id);
     }
 
     @Transactional
@@ -57,7 +63,7 @@ public class PermissionAdminService {
                 .eq(SysRolePermission::getPermissionId, id)).stream().map(SysRolePermission::getRoleId).toList();
         roleIds.forEach(userMapper::bumpTokenVersionByRole);
         rolePermissionMapper.delete(new LambdaQueryWrapper<SysRolePermission>().eq(SysRolePermission::getPermissionId, id));
-        permissionMapper.deleteById(id);
+        com.akarin.erp.common.util.Versions.requireOneRow(permissionMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     private SysPermission require(Long id) {

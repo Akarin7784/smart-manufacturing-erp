@@ -53,14 +53,18 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
         o.setTotalAmount(BigDecimal.ZERO);
         save(o);
         BigDecimal total = BigDecimal.ZERO;
+        int lineNo = 0;
         for (var l : req.items()) {
+            lineNo++;
             materialService.requireRef(l.materialId());
             SalesOrderItem it = new SalesOrderItem();
             it.setOrderId(o.getId()); it.setMaterialId(l.materialId());
-            it.setQty(l.qty()); it.setPrice(l.price()); it.setAmount(Money.lineAmount(l.qty(), l.price()));
+            it.setQty(l.qty()); it.setPrice(l.price());   // 单价原样保存（最多 4 位小数），不做 2 位舍入
+            it.setAmount(Money.requireFitsAmountColumn(Money.lineAmount(l.qty(), l.price()), "第 " + lineNo + " 行金额"));
             itemMapper.insert(it);
             total = Money.of(total.add(it.getAmount()));
         }
+        Money.requireFitsAmountColumn(total, "订单合计金额");
         o.setTotalAmount(total);
         updateById(o);
         return detail(o.getId());

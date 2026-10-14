@@ -12,7 +12,7 @@ export const ErrorCode = Object.freeze({
 
 export const ERROR_MESSAGES = Object.freeze({
   [ErrorCode.DUPLICATE_CODE]: '编码已存在（含已删除）',
-  [ErrorCode.CONCURRENT_MODIFIED]: '数据已被修改，请刷新重试',
+  [ErrorCode.CONCURRENT_MODIFIED]: '数据已被修改，请刷新后重试',
   [ErrorCode.REFERENCED]: '该数据已被单据引用，不能删除，可改为停用',
   [ErrorCode.DUPLICATE_REQUEST]: '请勿重复提交'
 })

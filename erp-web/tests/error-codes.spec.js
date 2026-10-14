@@ -17,13 +17,13 @@ describe('业务错误码', () => {
   it('常量与后端约定一致', () => {
     expect(ErrorCode).toMatchObject({ DUPLICATE_CODE: 40001, CONCURRENT_MODIFIED: 40900, REFERENCED: 40901, DUPLICATE_REQUEST: 40902 })
     expect(Object.isFrozen(ErrorCode)).toBe(true)
-    expect(MSG.conflict).toBe('数据已被修改，请刷新重试')
+    expect(MSG.conflict).toBe('数据已被修改，请刷新后重试')
   })
   it.each([[40001, 400], [40900, 409], [40901, 409], [40902, 409], [403, 403], [0, 0]])('categoryOf(%i)=%i', (c, s) => expect(categoryOf(c)).toBe(s))
 
   it.each([
     [400, 40001, '编码已存在（含已删除）'],
-    [409, 40900, '数据已被修改，请刷新重试'],
+    [409, 40900, '数据已被修改，请刷新后重试'],
     [409, 40901, '该数据已被单据引用，不能删除，可改为停用'],
     [409, 40902, '请勿重复提交']
   ])('HTTP %i + code %i -> %s，错误对象暴露子码与类别', async (status, code, text) => {

@@ -34,6 +34,7 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
             throw new BizException(ErrorCode.CODE_DUPLICATED, "编码已存在（含已删除）: " + e.getCode());
         e.setId(null);
         if (e.getStatus() == null) e.setStatus(ENABLED);
+        e.setVersion(0);
         try {
             save(e);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -44,12 +45,18 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
 
     @Transactional
     public E update(Long id, E patch) {
-        E existing = require(id);
+        E existing = require(id);   // 先查：不存在 404，再校验 version（与用户、角色、权限点一致）
+        com.akarin.erp.common.util.Versions.requirePresent(patch.getVersion());
         if (patch.getCode() != null && !patch.getCode().equals(existing.getCode()))
             throw new BizException("编码不可修改: " + existing.getCode());
-        patch.setId(id);
-        patch.setCode(existing.getCode());
-        updateById(patch);
+        Integer clientVersion = patch.getVersion();
+        // 只 SET 请求里带了的可编辑字段（name/spec/status...，updated_at 自动填充）；id、编码、version、审计字段一律不写回。
+        // WHERE id + 客户端 version，同时 version = version + 1；0 行 → 40900。不再整行 updateById。
+        patch.setId(null); patch.setCode(null); patch.setVersion(null);
+        patch.setDeleted(null); patch.setCreatedAt(null); patch.setCreatedBy(null);
+        com.akarin.erp.common.util.Versions.requireOneRow(baseMapper.update(patch,
+                new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<E>()
+                        .eq("id", id).eq("version", clientVersion).setSql("version = version + 1")));
         return require(id);
     }
 
@@ -61,7 +68,7 @@ public abstract class MasterDataService<M extends BaseMapper<E> & CodeCountingMa
             if (ref.isPresent())
                 throw new BizException(ErrorCode.MASTER_DATA_REFERENCED, "已被" + ref.get() + "引用，不能删除，只能停用");
         }
-        removeById(id);
+        com.akarin.erp.common.util.Versions.requireOneRow(baseMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     public E require(Long id) {

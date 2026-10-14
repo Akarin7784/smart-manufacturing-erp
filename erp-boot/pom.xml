@@ -4,7 +4,7 @@
   <parent><groupId>com.akarin</groupId><artifactId>erp</artifactId><version>0.1.0-SNAPSHOT</version></parent>
   <artifactId>erp-boot</artifactId>
   <!-- 供覆盖率门禁在 -DskipTests 时一并跳过 -->
-  <properties><skipTests>false</skipTests></properties>
+  <properties><skipTests>false</skipTests><coverage.minimum>0.80</coverage.minimum></properties>
   <dependencies>
     <dependency><groupId>com.akarin</groupId><artifactId>erp-common</artifactId></dependency>
     <dependency><groupId>com.akarin</groupId><artifactId>erp-auth</artifactId></dependency>
@@ -25,7 +25,7 @@
       <executions><execution><id>report-aggregate</id><phase>verify</phase><goals><goal>report-aggregate</goal></goals>
         <configuration><includeCurrentProject>true</includeCurrentProject></configuration></execution></executions>
     </plugin>
-    <!-- 覆盖率门禁：汇总所有模块的 exec 与 classes，行、分支覆盖率都不得低于 0.80（与 report-aggregate 同一口径） -->
+    <!-- 覆盖率门禁：汇总所有模块的 exec 与 classes，行、分支覆盖率都不得低于 coverage.minimum（与 report-aggregate 同一口径） -->
     <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-antrun-plugin</artifactId><version>3.1.0</version>
       <executions><execution><id>jacoco-coverage-gate</id><phase>verify</phase><goals><goal>run</goal></goals>
         <configuration><skip>${skipTests}</skip><target>
@@ -35,12 +35,12 @@
             <structure name="erp"><classfiles><fileset dir="${project.basedir}/.." includes="erp-*/target/classes/**/*.class"/></classfiles></structure>
             <check failonviolation="true" violationsproperty="jacoco.violations">
               <rule element="BUNDLE">
-                <limit counter="LINE" value="COVEREDRATIO" minimum="0.80"/>
-                <limit counter="BRANCH" value="COVEREDRATIO" minimum="0.80"/>
+                <limit counter="LINE" value="COVEREDRATIO" minimum="${coverage.minimum}"/>
+                <limit counter="BRANCH" value="COVEREDRATIO" minimum="${coverage.minimum}"/>
               </rule>
             </check>
           </jacoco:report>
-          <echo level="info" message="JaCoCo coverage gate: All coverage checks have been met (LINE &gt;= 0.80, BRANCH &gt;= 0.80)"/>
+          <echo level="info" message="JaCoCo coverage gate: All coverage checks have been met (LINE &gt;= ${coverage.minimum}, BRANCH &gt;= ${coverage.minimum})"/>
         </target></configuration></execution></executions>
       <dependencies><dependency><groupId>org.jacoco</groupId><artifactId>org.jacoco.ant</artifactId><version>0.8.12</version></dependency></dependencies>
     </plugin><plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId><configuration><excludes><exclude><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId></exclude></excludes></configuration></plugin></plugins></build>

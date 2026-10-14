@@ -35,7 +35,7 @@ class MasterDataServiceTest {
     @BeforeEach void setUp() {
         ReflectionTestUtils.setField(svc, "baseMapper", mapper);
         when(mapper.insert(any(Material.class))).thenReturn(1);
-        when(mapper.updateById(any(Material.class))).thenReturn(1);
+        when(mapper.update(any(Material.class), any())).thenReturn(1);
         when(mapper.deleteById(anyLong())).thenReturn(1);
     }
 
@@ -63,11 +63,34 @@ class MasterDataServiceTest {
 
     @Test void codeIsImmutable() {
         when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
-        assertThatThrownBy(() -> svc.update(1L, m(null, "B"))).hasMessageContaining("编码不可修改");
-        Material patch = m(null, null); patch.setName("new");
+        Material other = m(null, "B"); other.setVersion(0);
+        assertThatThrownBy(() -> svc.update(1L, other)).hasMessageContaining("编码不可修改");
+        Material patch = m(null, null); patch.setName("new"); patch.setVersion(0);
         svc.update(1L, patch);
-        assertThat(patch.getCode()).isEqualTo("A");
-        verify(mapper).updateById(patch);
+        assertThat(patch.getCode()).as("编码不写回").isNull();
+        assertThat(patch.getVersion()).as("version 只在 WHERE 里，SET 用 version + 1").isNull();
+        verify(mapper).update(org.mockito.ArgumentMatchers.eq(patch), any());
+        verify(mapper, never()).updateById(any(Material.class));
+    }
+
+    @Test void updateMissingRecordIs404BeforeVersionCheck() {
+        assertThatThrownBy(() -> svc.update(42L, m(null, null))).extracting("errorCode").isEqualTo(ErrorCode.NOT_FOUND);
+    }
+
+    @Test void softDeleteMustAffectOneRow() {
+        when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
+        svc.setCheckers(List.of());
+        when(mapper.deleteById(1L)).thenReturn(0);
+        assertThatThrownBy(() -> svc.delete(1L)).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
+    }
+
+    @Test void updateRequiresVersionAndMapsStaleTo40900() {
+        when(mapper.selectById(1L)).thenReturn(m(1L, "A"));
+        assertThatThrownBy(() -> svc.update(1L, m(null, null))).hasMessageStartingWith("version 不能为空")
+                .extracting("errorCode").isEqualTo(ErrorCode.BAD_REQUEST);
+        when(mapper.update(any(Material.class), any())).thenReturn(0);
+        Material stale = m(null, null); stale.setVersion(3);
+        assertThatThrownBy(() -> svc.update(1L, stale)).extracting("errorCode").isEqualTo(ErrorCode.CONCURRENT_MODIFICATION);
     }
 
     @Test void referencedCannotBeDeleted() {

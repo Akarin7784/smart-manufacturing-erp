@@ -20,6 +20,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /** 查重通过后插入时撞唯一键（并发同编码创建）→ 400/40001；以及 admin 初始密码缺失时启动失败 */
@@ -46,7 +47,7 @@ class AdminServiceDuplicateKeyTest {
         when(roleMapper.countByCodeIncludingDeleted("OPS")).thenReturn(0L);
         when(roleMapper.insert(any(SysRole.class))).thenThrow(new DuplicateKeyException("uk_code"));
         var svc = new RoleAdminService(roleMapper, permissionMapper, mock(SysRolePermissionMapper.class), mock(SysUserRoleMapper.class), userMapper);
-        assertThatThrownBy(() -> svc.create(new CodeNameReq("OPS", "运维")))
+        assertThatThrownBy(() -> svc.create(new CodeNameReq("OPS", "运维", null)))
                 .isInstanceOf(BizException.class).hasMessageStartingWith("编码已存在")
                 .extracting("errorCode").isEqualTo(ErrorCode.CODE_DUPLICATED);
     }
@@ -58,8 +59,11 @@ class AdminServiceDuplicateKeyTest {
         ReflectionTestUtils.setField(init, "adminPassword", "");
         assertThatThrownBy(() -> init.run(null)).isInstanceOf(IllegalStateException.class).hasMessageContaining("ERP_ADMIN_PASSWORD");
         ReflectionTestUtils.setField(init, "adminPassword", "s3cret!");
+        when(userMapper.update(isNull(), any())).thenReturn(1);
         init.run(null);
-        assertThat(admin.getPassword()).isEqualTo("s3cret!");
-        verify(userMapper).updateById(admin);
+        verify(userMapper).update(isNull(), any());
+        verify(userMapper, never()).updateById(any(SysUser.class));
+        when(userMapper.update(isNull(), any())).thenReturn(0);
+        assertThatThrownBy(() -> init.run(null)).hasMessage("初始化 admin 密码失败");
     }
 }

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { api, expectCode, apiLogin, uiLogin, uniq } from './helpers.js'
+import { api, expectCode, apiLogin, uiLogin, uniq, makeMdm, makeFixture } from './helpers.js'
 
 const ADMIN = { u: 'admin', p: 'admin123' }
 const LISTS = [
@@ -104,9 +104,12 @@ test.describe('只读用户（无 mdm:write）', () => {
   })
 
   test('直接调用写接口 → 403 / code 403', async ({ request }) => {
+    const admin = await apiLogin(request, ADMIN.u, ADMIN.p)
+    const mat = await makeMdm(request, admin, 'materials')
+    const cus = await makeMdm(request, admin, 'customers')
     expectCode(await api(request, 'POST', '/api/mdm/materials', { token, data: { code: uniq('RO-'), name: 'x' } }), 403, 403)
-    expectCode(await api(request, 'PUT', '/api/mdm/materials/1', { token, data: { code: 'DM-M001', name: 'x', status: 1 } }), 403, 403)
-    expectCode(await api(request, 'DELETE', '/api/mdm/customers/1', { token }), 403, 403)
+    expectCode(await api(request, 'PUT', `/api/mdm/materials/${mat.id}`, { token, data: { code: mat.code, name: 'x', status: 1, version: mat.version } }), 403, 403)
+    expectCode(await api(request, 'DELETE', `/api/mdm/customers/${cus.id}`, { token }), 403, 403)
     expectCode(await api(request, 'POST', '/api/sys/roles', { token, data: { code: uniq('X'), name: 'x' } }), 403, 403)
   })
 })
@@ -159,7 +162,8 @@ async function makeReferenced(request, token, c, id) {
     expectCode(await api(request, 'POST', '/api/finance/payments', { token, data: { paymentType: 'RECEIPT', partnerId: id, amount: 1 } }), 200, 0)
     return
   }
-  const ids = { supplierId: 1, warehouseId: 1, materialId: 1 }
+  const f = await makeFixture(request, token)
+  const ids = { supplierId: f.supplierId, warehouseId: f.warehouseId, materialId: f.materialId }
   if (c.res === 'materials') ids.materialId = id
   if (c.res === 'suppliers') ids.supplierId = id
   if (c.res === 'warehouses') ids.warehouseId = id
@@ -204,9 +208,13 @@ for (const c of CRUD) {
       const body = (await reqP).postDataJSON()
       expect(body.code).toBe(code)
       expect(body.name).toBe(newName)
+      // 乐观锁：PUT 必须带当前行的 version（新建行为 0）
+      expect(body.version).toBe(0)
       const r = await resP
       expect(r.status()).toBe(200)
-      expect((await r.json()).code).toBe(0)
+      const rb = await r.json()
+      expect(rb.code).toBe(0)
+      expect(rb.data.version).toBe(1)
       await expect(rowOf(page, code)).toContainText(newName)
     })
 

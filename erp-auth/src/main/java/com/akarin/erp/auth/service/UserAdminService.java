@@ -11,7 +11,9 @@ import com.akarin.erp.auth.mapper.SysUserRoleMapper;
 import com.akarin.erp.common.exception.BizException;
 import com.akarin.erp.common.exception.ErrorCode;
 import com.akarin.erp.common.util.SecurityUtils;
+import com.akarin.erp.common.util.Versions;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -53,6 +55,7 @@ public class UserAdminService {
         u.setRealName(req.realName());
         u.setStatus(SysUser.ENABLED);
         u.setTokenVersion(0);
+        u.setVersion(0);
         try {
             userMapper.insert(u);
         } catch (org.springframework.dao.DuplicateKeyException race) {   // 并发同编码创建
@@ -65,17 +68,26 @@ public class UserAdminService {
     @Transactional
     public UserView update(Long id, UserReqs.Update req) {
         SysUser u = require(id);
-        u.setRealName(req.realName());
-        userMapper.updateById(u);
-        return view(u);
+        com.akarin.erp.common.util.Versions.requirePresent(req.version());
+        // 只更新可编辑字段（real_name），WHERE id + 客户端 version；不整行写回，避免覆盖并发提交的 status / password / token_version
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id).eq(SysUser::getVersion, req.version())
+                .set(SysUser::getRealName, req.realName())
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("version = version + 1")));
+        return view(require(id));
     }
 
     @Transactional
     public void resetPassword(Long id, String password) {
-        SysUser u = require(id);
-        u.setPassword(encoder.encode(password));
-        userMapper.updateById(u);
-        userMapper.bumpTokenVersion(id);
+        require(id);
+        // 定向更新，不校验 version，但会递增 version：并发的“改姓名”拿着旧 version 提交会得到 40900，
+        // 而不会把旧的 status / password / token_version 写回去。前端拿旧 version 提交得到 40900 是预期行为（重新查详情即可）。
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id)
+                .set(SysUser::getPassword, encoder.encode(password))
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("token_version = token_version + 1, version = version + 1")));
     }
 
     @Transactional
@@ -85,9 +97,13 @@ public class UserAdminService {
             if (isSelf(u)) throw new BizException("不能停用当前登录用户");
             guardLastAdmin(u, "停用");
         }
-        u.setStatus(enabled ? SysUser.ENABLED : SysUser.DISABLED);
-        userMapper.updateById(u);
-        userMapper.bumpTokenVersion(id);
+        // 定向更新，不校验 version，但会递增 version：并发的“改姓名”拿着旧 version 提交会得到 40900，
+        // 而不会把旧的 status / password / token_version 写回去。前端拿旧 version 提交得到 40900 是预期行为（重新查详情即可）。
+        Versions.requireOneRow(userMapper.update(null, new LambdaUpdateWrapper<SysUser>()
+                .eq(SysUser::getId, id)
+                .set(SysUser::getStatus, enabled ? SysUser.ENABLED : SysUser.DISABLED)
+                .set(SysUser::getUpdatedAt, java.time.LocalDateTime.now())
+                .setSql("token_version = token_version + 1, version = version + 1")));
         return view(require(id));
     }
 
@@ -95,7 +111,7 @@ public class UserAdminService {
     public UserView assignRoles(Long id, List<Long> roleIds) {
         SysUser u = require(id);
         replaceRoles(u, roleIds);
-        userMapper.bumpTokenVersion(id);
+        Versions.requireOneRow(userMapper.bumpTokenVersion(id));   // 定向 SQL：不校验 version，但 token_version 和 version 都 +1
         return view(require(id));
     }
 
@@ -105,8 +121,8 @@ public class UserAdminService {
         if (isSelf(u)) throw new BizException("不能删除当前登录用户");
         guardLastAdmin(u, "删除");
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
-        userMapper.bumpTokenVersion(id);
-        userMapper.deleteById(id);
+        Versions.requireOneRow(userMapper.bumpTokenVersion(id));
+        Versions.requireOneRow(userMapper.deleteById(id));   // 按 id 软删，不带 version 条件
     }
 
     private void replaceRoles(SysUser u, List<Long> roleIds) {
@@ -140,6 +156,6 @@ public class UserAdminService {
 
     private UserView view(SysUser u) {
         return new UserView(u.getId(), u.getUsername(), u.getRealName(),
-                Objects.equals(u.getStatus(), SysUser.ENABLED), userMapper.selectRoleCodes(u.getId()));
+                Objects.equals(u.getStatus(), SysUser.ENABLED), userMapper.selectRoleCodes(u.getId()), u.getVersion());
     }
 }

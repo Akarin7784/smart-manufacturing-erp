@@ -15,7 +15,7 @@ public final class UserReqs {
                          @Size(max = 64) String realName,
                          List<Long> roleIds) {}
 
-    public record Update(@Size(max = 64) String realName) {}
+    public record Update(@Size(max = 64) String realName, Integer version) {}
 
     public record Password(@NotBlank @Size(min = 6, max = 64) String password) {}
 
