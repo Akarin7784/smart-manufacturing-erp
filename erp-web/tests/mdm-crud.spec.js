@@ -140,6 +140,16 @@ describe('编辑 PUT 携带原编码（四类主数据）', () => {
     expect(body.status).toBe(0)
     expect(body.version).toBe(row.version)
   })
+
+  it('编辑时清空选填字段提交空串而不是 null', async () => {
+    updateMdm.mockImplementation(ok)
+    const row = { id: 1, code: 'M001', name: '物料', spec: 's', unit: 'u', category: 'c', status: 1, version: 2 }
+    const w = mount(MdmFormDialog, { props: { modelValue: true, resource: 'materials', row }, global: { plugins: [setup()] }, attachTo: document.body })
+    await flushPromises()
+    w.vm.form.spec = '  '
+    await w.vm.onSave(); await flushPromises()
+    expect(updateMdm.mock.calls.at(-1)[2].spec).toBe('')
+  })
 })
 
 describe('MdmFormDialog', () => {

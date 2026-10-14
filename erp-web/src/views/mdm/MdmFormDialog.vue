@@ -67,7 +67,8 @@ function payload() {
       continue
     }
     const v = typeof form[f.prop] === 'string' ? form[f.prop].trim() : form[f.prop]
-    body[f.prop] = v === '' ? null : v
+    // 新增时空串转 null；编辑时保留空串，后端部分更新会跳过 null，传空串才能清空选填字段
+    body[f.prop] = v === '' && !isEdit.value ? null : v
   }
   // 乐观锁：编辑时原样带回该行的 version，新增不传
   if (isEdit.value && props.row?.version != null) body.version = props.row.version
