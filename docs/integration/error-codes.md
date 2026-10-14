@@ -6,7 +6,7 @@
 | code | HTTP | problem type | 含义 | MES 处理 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 0 | 201 / 200 | — | 首次受理 / 幂等重放 | 完成 | 已有 |
-| 400 | 400 | `validation-error` | 字段校验失败、引用不存在、uom 不符、`quantity` 超 6 位小数（不舍入）、`Idempotency-Key` 或 `requestNo` 缺失、两者不一致 | 不重试，转人工 | 已有（BAD_REQUEST） |
+| 400 | 400 | `validation-error` | 字段校验失败、引用不存在、uom 不符、报废 `reasonCode` 不在字典、领料缺 `operationNo`/`reportId`、任一回调缺 `warehouseCode`、`quantity` 超 6 位小数（不舍入）、`Idempotency-Key` 或 `requestNo` 缺失、两者不一致 | 不重试，转人工 | 已有（BAD_REQUEST） |
 | 401 | 401 | `authentication-required` | 令牌缺失 / 无效 / 过期 / `aud` 不符 | 刷新令牌后重试 1 次 | 已有 |
 | 403 | 403 | `access-denied` | scope 不符；用户 JWT 调回调接口；服务令牌调普通业务接口 | 不重试 | 已有（FORBIDDEN） |
 | 40900 | 409 | `concurrent-modification` | 并发冲突，内部重试用尽 | 退避重试 | 已有 |
@@ -17,6 +17,6 @@
 | 500 | 500 | `internal-error` | 系统异常 | 退避重试 | 已有 |
 | 50301 | 503 | `service-busy` | 取号繁忙；未落库、未占用 `requestNo` | 退避重试 | 已有 |
 
-MES 侧 problem type `idempotency-key-conflict` 在 MES 自己的接口里是 422；ERP 对应为 409 / 40902。
+`idempotency-key-conflict` 在所有接口（三个回调和下达 dispatch）都是 409 / 40902，不使用 422。
 网络错误、超时、429 一律退避重试；重试始终用同一个 `requestNo`。
 "计划新增"的码在回调实现 PR 中加入 `ErrorCode` 枚举，码值以本表为准。
