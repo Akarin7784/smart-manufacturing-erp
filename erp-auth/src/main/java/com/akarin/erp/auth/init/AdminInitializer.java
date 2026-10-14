@@ -6,23 +6,26 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
-/** 首次启动时补齐 admin 的密码（schema 里的 admin 账号密码占位为空） */
+/**
+ * 首次启动时补齐 admin 的密码（schema 里的 admin 账号密码占位为空）。
+ * 用 SmartInitializingSingleton 而不是 ApplicationRunner：前者在所有单例（含 SQL 初始化）就绪后、Web 服务器开始接收请求之前执行；
+ * ApplicationRunner 在 Tomcat 已经接请求、/actuator/health 已 UP 之后才跑，CI 的登录探测可能抢在它前面拿到 401（main 59a104b）。
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class AdminInitializer implements ApplicationRunner {
+public class AdminInitializer implements SmartInitializingSingleton {
     private final SysUserMapper userMapper;
     private final PasswordEncoder encoder;
     @Value("${erp.init.admin-password:}")
     private String adminPassword;
 
     @Override
-    public void run(ApplicationArguments args) {
+    public void afterSingletonsInstantiated() {
         SysUser admin = userMapper.selectOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, "admin"));
         if (admin != null && (admin.getPassword() == null || admin.getPassword().isEmpty())) {
             if (adminPassword == null || adminPassword.isBlank())

@@ -57,13 +57,13 @@ class AdminServiceDuplicateKeyTest {
         when(userMapper.selectOne(any())).thenReturn(admin);
         var init = new AdminInitializer(userMapper, NoOpPasswordEncoder.getInstance());
         ReflectionTestUtils.setField(init, "adminPassword", "");
-        assertThatThrownBy(() -> init.run(null)).isInstanceOf(IllegalStateException.class).hasMessageContaining("ERP_ADMIN_PASSWORD");
+        assertThatThrownBy(() -> init.afterSingletonsInstantiated()).isInstanceOf(IllegalStateException.class).hasMessageContaining("ERP_ADMIN_PASSWORD");
         ReflectionTestUtils.setField(init, "adminPassword", "s3cret!");
         when(userMapper.update(isNull(), any())).thenReturn(1);
-        init.run(null);
+        init.afterSingletonsInstantiated();
         verify(userMapper).update(isNull(), any());
         verify(userMapper, never()).updateById(any(SysUser.class));
         when(userMapper.update(isNull(), any())).thenReturn(0);
-        assertThatThrownBy(() -> init.run(null)).hasMessage("初始化 admin 密码失败");
+        assertThatThrownBy(() -> init.afterSingletonsInstantiated()).hasMessage("初始化 admin 密码失败");
     }
 }
