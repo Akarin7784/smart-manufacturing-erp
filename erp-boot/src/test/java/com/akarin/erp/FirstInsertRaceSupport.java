@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * #13 首次入库并发（库存行还不存在）的确定性交错：
  * 事务 A 执行完“建库存行”语句（新代码 ensureRow / 旧代码 insert）之后、提交之前，钩子把 A 停住；
- * 此时才放事务 B 进来做同一 (物料, 仓库) 的入库，等 B 确实卡在 A 的行锁上（MySQL 看 innodb_trx 的 LOCK WAIT）再放 A 提交。
+ * 此时才放事务 B 进来做同一 (物料, 仓库) 的入库；B 读完库存（无行）走到建行语句时放 A 提交。只断言结果。
  * 旧代码：B 的 insert 在 A 提交后撞唯一键 → 409/40900。新代码：B 走 ON DUPLICATE KEY 分支，再 FOR UPDATE 读到 A 的结果并累加。
  */
 abstract class FirstInsertRaceSupport extends ApiTestSupport {
@@ -33,8 +33,7 @@ abstract class FirstInsertRaceSupport extends ApiTestSupport {
     static volatile CountDownLatch aCreatedRow = new CountDownLatch(1);
     static volatile CountDownLatch releaseA = new CountDownLatch(1);
     static volatile Thread bThread;
-    static volatile long bEnteredAt;
-    static volatile boolean bReturned;
+    static volatile CountDownLatch bReachedCreate = new CountDownLatch(1);
     static volatile boolean hookFired;
 
     @TestConfiguration
@@ -47,10 +46,9 @@ abstract class FirstInsertRaceSupport extends ApiTestSupport {
                         boolean creator = armed && ROW_CREATORS.contains(m.getName());
                         boolean isA = creator && first.compareAndSet(null, Thread.currentThread());
                         boolean isB = creator && !isA && first.get() != Thread.currentThread();
-                        if (isB) { bEnteredAt = System.currentTimeMillis(); bThread = Thread.currentThread(); }
+                        if (isB) { bThread = Thread.currentThread(); bReachedCreate.countDown(); }
                         Object r;
-                        try { r = m.invoke(bean, args); } catch (InvocationTargetException ex) { if (isB) bReturned = true; throw ex.getCause(); }
-                        if (isB) bReturned = true;
+                        try { r = m.invoke(bean, args); } catch (InvocationTargetException ex) { throw ex.getCause(); }
                         if (isA) {
                             hookFired = true;
                             aCreatedRow.countDown();
@@ -66,15 +64,9 @@ abstract class FirstInsertRaceSupport extends ApiTestSupport {
     @Autowired JdbcTemplate jdbc;
 
     @AfterEach void disarmRace() {
-        armed = false; first.set(null); bThread = null; bReturned = false; hookFired = false;
+        armed = false; first.set(null); bThread = null; bReachedCreate = new CountDownLatch(1); hookFired = false;
         aCreatedRow = new CountDownLatch(1); releaseA = new CountDownLatch(1);
     }
-
-    /** B 是否已卡在 A 的锁上 */
-    abstract boolean bIsBlocked();
-
-    /** 是否必须观察到 B 被阻塞（MySQL 必须；H2 的锁等待行为不同，仅尽力等待） */
-    abstract boolean requireBlocked();
 
     void firstReceiveRace(String admin) throws Exception {
         long wh = mdm(admin, "warehouses", "FW"), mat = mdm(admin, "materials", "FM");
@@ -87,13 +79,8 @@ abstract class FirstInsertRaceSupport extends ApiTestSupport {
             Future<JsonNode> a = ex.submit(() -> call(admin, "POST", "/api/inventory/in", in1));
             assertThat(aCreatedRow.await(20, TimeUnit.SECONDS)).as("钩子触发：A 已建行未提交").isTrue();
             Future<JsonNode> b = ex.submit(() -> call(admin, "POST", "/api/inventory/in", in2));
-            boolean blocked = false;
-            long deadline = System.currentTimeMillis() + (requireBlocked() ? 15000 : 3000);
-            while (System.currentTimeMillis() < deadline) {
-                if (bThread != null && bIsBlocked()) { blocked = true; break; }
-                Thread.sleep(20);
-            }
-            if (requireBlocked()) assertThat(blocked).as("B 必须卡在 A 未提交的行上（确定性交错）").isTrue();
+            // B 已经读过库存（没有行）并走到建行语句：此时 A 仍未提交，两个事务必然重叠。不做锁等待探测或计时判断。
+            assertThat(bReachedCreate.await(20, TimeUnit.SECONDS)).as("B 走到建行语句").isTrue();
             releaseA.countDown();
             JsonNode ra = a.get(30, TimeUnit.SECONDS), rb = b.get(30, TimeUnit.SECONDS);
             assertThat(hookFired).isTrue();
