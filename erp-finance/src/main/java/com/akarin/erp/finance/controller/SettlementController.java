@@ -27,7 +27,7 @@ public class SettlementController {
     @PostMapping("/payments")
     @PreAuthorize("hasAuthority('finance:write')")
     public R<Payment> register(@Valid @RequestBody PaymentCreateReq req, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
-        return R.ok(idem.execute(idemKey, "finance.payment.create", req, () -> {
+        return R.ok(idem.execute(idemKey, "finance.payment.create", req, "fin_payment", () -> {
             String prefix = service.validatePayment(req);
             return com.akarin.erp.common.util.NoGenerator.reserveThen(java.util.Map.of(prefix, 1), () -> service.registerPayment(req));
         }, Payment::getId, service::payment));

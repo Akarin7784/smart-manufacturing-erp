@@ -133,7 +133,7 @@ jobs:
           demo=$(curl -s "http://localhost:8080/api/mdm/materials?keyword=DM-" -H "Authorization: Bearer $token")
           echo "$demo" | head -c 200; echo
           echo "$demo" | grep -q '"total":0'
-      - name: MySQL integration tests (@Tag mysql - edit-vs-submit race, first stock-in race, reversed-order race, doc-no and stock revive, doc-no busy and idempotency)
+      - name: MySQL integration tests (@Tag mysql - edit-vs-submit race, first stock-in race, reversed-order race, doc-no and stock revive, doc-no busy and idempotency, idempotency lease)
         env:
           MYSQL_HOST: 127.0.0.1
           MYSQL_PORT: '3306'
@@ -148,6 +148,7 @@ jobs:
           grep -q 'tests="1"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.ReversedOrderRaceMySqlTest.xml
           grep -q 'tests="3"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.DocNoAndStockMySqlTest.xml
           grep -q 'tests="2"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.DocNoBusyMySqlTest.xml
+          grep -q 'tests="7"' erp-boot/target/surefire-reports/TEST-com.akarin.erp.IdemLeaseMySqlTest.xml
       - name: App log
         if: always()
         run: tail -n 200 app.log || true

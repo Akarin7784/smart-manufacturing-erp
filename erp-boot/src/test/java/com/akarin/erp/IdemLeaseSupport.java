@@ -1,0 +1,202 @@
+package com.akarin.erp;
+
+import com.akarin.erp.common.idem.IdempotencyService;
+import com.akarin.erp.common.util.NoGenerator;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.*;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+
+/**
+ * #22-9 租期：业务已提交但记录仍 PROCESSING → 租期后重放；租期内 → 40904；
+ * 两个实例同时接管 → 只一张单；单据 UNIQUE(idem_user, idem_key)。
+ */
+abstract class IdemLeaseSupport extends ApiTestSupport {
+    @Autowired JdbcTemplate jdbc;
+
+    record Res(int status, int code, JsonNode data) {}
+
+    Res post2(String token, String url, String body, String key) throws Exception {
+        var req = post(url).contentType(MediaType.APPLICATION_JSON).content(body).header("Authorization", "Bearer " + token);
+        if (key != null) req.header(IdempotencyService.HEADER, key);
+        var res = mvc.perform(req).andReturn().getResponse();
+        JsonNode j = om.readTree(res.getContentAsString(StandardCharsets.UTF_8));
+        return new Res(res.getStatus(), j.path("code").asInt(), j.path("data"));
+    }
+
+    String admin;
+    long supplier, warehouse, material;
+
+    void setUpRefs() throws Exception {
+        admin = loginAdmin();
+        supplier = mdm(admin, "suppliers", "LS"); warehouse = mdm(admin, "warehouses", "LW");
+        material = mdm(admin, "materials", "LM");
+    }
+
+    String po(String remark) {
+        return "{\"supplierId\":" + supplier + ",\"warehouseId\":" + warehouse + ",\"remark\":\"" + remark
+                + "\",\"items\":[{\"materialId\":" + material + ",\"qty\":\"1\",\"price\":\"2\"}]}";
+    }
+
+    int poCount(String remark) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM pur_order WHERE remark=?", Integer.class, remark);
+    }
+
+    LocalDateTime now() { return LocalDateTime.now(NoGenerator.ZONE); }
+
+    /** 1. 单据已提交、记录仍 PROCESSING；租期过后同 key 重放，不建第二张 */
+    void committedButProcessingReplaysAfterLease() throws Exception {
+        setUpRefs();
+        String remark = uniq("cmt"), key = "lease-cmt-" + remark;
+        Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
+        String hash = IdempotencyService.hash("purchase.order.create", req);
+        // 模拟：业务事务已提交，但 mark-done 失败 / 进程崩溃
+        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, created_by, version, deleted, idem_user, idem_key) "
+                        + "VALUES (?, ?, ?, 'DRAFT', 2, ?, 'admin', 0, 0, 'admin', ?)",
+                "PO-LEASE-" + remark, supplier, warehouse, remark, key);
+        long docId = jdbc.queryForObject("SELECT id FROM pur_order WHERE remark=?", Long.class, remark);
+        LocalDateTime n = now();
+        jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, result_id, created_at, expires_at, owner_token, lease_until) "
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', NULL, ?, ?, 'dead-token', ?)",
+                key, hash, Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(5)));
+        Res r = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(r.code()).isZero();
+        assertThat(r.data().path("order").path("id").asLong()).isEqualTo(docId);
+        assertThat(poCount(remark)).as("不建第二张").isEqualTo(1);
+        Map<String, Object> row = jdbc.queryForMap("SELECT status, result_id FROM sys_idempotency WHERE idem_key=?", key);
+        assertThat(row.get("status")).isEqualTo("DONE");
+        assertThat(((Number) row.get("result_id")).longValue()).isEqualTo(docId);
+    }
+
+    /** 2. 原请求还在跑、租期未过 → 409/40904 */
+    void retryWhileLeaseValidIs40904() throws Exception {
+        setUpRefs();
+        String remark = uniq("run"), key = "lease-run-" + remark;
+        Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
+        LocalDateTime n = now();
+        jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'alive', ?)",
+                key, IdempotencyService.hash("purchase.order.create", req),
+                Timestamp.valueOf(n), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.plusSeconds(60)));
+        Res r = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(r.status() + "/" + r.code()).isEqualTo("409/40904");
+        assertThat(poCount(remark)).isZero();
+    }
+
+    /** 3. 两个实例同时接管过期租期 → 只一张单，两边拿到同一张或一方 40904 后重放同一张 */
+    void twoReclaimersExactlyOneDocument() throws Exception {
+        setUpRefs();
+        String remark = uniq("two"), key = "lease-two-" + remark;
+        Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
+        LocalDateTime n = now();
+        jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'old', ?)",
+                key, IdempotencyService.hash("purchase.order.create", req),
+                Timestamp.valueOf(n.minusMinutes(2)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(5)));
+        ExecutorService ex = Executors.newFixedThreadPool(2);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<Res>> fs = List.of(
+                ex.submit(() -> { go.await(); return post2(admin, "/api/purchase/orders", po(remark), key); }),
+                ex.submit(() -> { go.await(); return post2(admin, "/api/purchase/orders", po(remark), key); }));
+        go.countDown();
+        Set<Long> ids = new HashSet<>();
+        for (Future<Res> f : fs) {
+            Res r = f.get(30, TimeUnit.SECONDS);
+            if (r.code() == 0) ids.add(r.data().path("order").path("id").asLong());
+            else assertThat(r.status() + "/" + r.code()).isEqualTo("409/40904");
+        }
+        ex.shutdown();
+        assertThat(poCount(remark)).isEqualTo(1);
+        long only = jdbc.queryForObject("SELECT id FROM pur_order WHERE remark=?", Long.class, remark);
+        // 再重放一次：两边最终都能拿到这一张
+        Res again = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(again.code()).isZero();
+        assertThat(again.data().path("order").path("id").asLong()).isEqualTo(only);
+        if (!ids.isEmpty()) assertThat(ids).containsOnly(only);
+    }
+
+    /** 4. 单据 UNIQUE(idem_user, idem_key)：库本身不能落两张同 key 的单 */
+    void documentUniqueConstraintBlocksSecondInsert() throws Exception {
+        setUpRefs();
+        String key = "uk-" + uniq("x");
+        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, version, deleted, idem_user, idem_key) "
+                        + "VALUES (?, ?, ?, 'DRAFT', 1, 'a', 0, 0, 'admin', ?)", "PO-UK-1-" + key, supplier, warehouse, key);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, version, deleted, idem_user, idem_key) "
+                        + "VALUES (?, ?, ?, 'DRAFT', 1, 'b', 0, 0, 'admin', ?)", "PO-UK-2-" + key, supplier, warehouse, key))
+                .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM pur_order WHERE idem_user='admin' AND idem_key=?", Integer.class, key)).isEqualTo(1);
+        // 未带幂等键（两列都 null）仍可多张
+        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, version, deleted) "
+                + "VALUES (?, ?, ?, 'DRAFT', 1, 'n1', 0, 0)", "PO-UK-N1-" + key, supplier, warehouse);
+        jdbc.update("INSERT INTO pur_order (order_no, supplier_id, warehouse_id, status, total_amount, remark, version, deleted) "
+                + "VALUES (?, ?, ?, 'DRAFT', 1, 'n2', 0, 0)", "PO-UK-N2-" + key, supplier, warehouse);
+    }
+
+    /** 崩溃模拟：PROCESSING 留下、无单据、租期已过 → 同 key 成功且只一张 */
+    void crashThenLeaseExpiredCreatesOne() throws Exception {
+        setUpRefs();
+        String remark = uniq("cr"), key = "lease-cr-" + remark;
+        Object req = om.readValue(po(remark), com.akarin.erp.purchase.dto.PurchaseOrderCreateReq.class);
+        LocalDateTime n = now();
+        jdbc.update("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) "
+                        + "VALUES ('admin', ?, ?, 'PROCESSING', ?, ?, 'crashed', ?)",
+                key, IdempotencyService.hash("purchase.order.create", req),
+                Timestamp.valueOf(n.minusMinutes(5)), Timestamp.valueOf(n.plusHours(24)), Timestamp.valueOf(n.minusSeconds(30)));
+        Res r = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(r.code()).isZero();
+        assertThat(poCount(remark)).isEqualTo(1);
+        Res r2 = post2(admin, "/api/purchase/orders", po(remark), key);
+        assertThat(r2.data().path("order").path("id").asLong()).isEqualTo(r.data().path("order").path("id").asLong());
+    }
+
+    @Autowired org.springframework.boot.autoconfigure.jdbc.DataSourceProperties props;
+
+    /**
+     * 慢但还活着的原请求 + 租期过后的接管者：外部会话锁住库存行，原请求 A（手工入库，带 key）卡在 FOR UPDATE 上；
+     * 租期（2s）过后同 key 的 B 进来：查不到已提交的单据 → 接管 → 也卡在库存行上；放锁后两者先后提交，
+     * 后提交的一方撞单据 UNIQUE(idem_user, idem_key) 回滚，查到对方的流水后重放。
+     * 结果：只一条流水、库存只 +1，A 与 B 拿到同一条流水。
+     */
+    void slowOriginalAndTakeoverOneDocument() throws Exception {
+        setUpRefs();
+        String tag = uniq("slow"), key = "lease-slow-" + tag;
+        String in = "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"1\",\"remark\":\"" + tag + "\"}";
+        assertThat(post2(admin, "/api/inventory/in", "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"10\"}", null).code()).isZero();
+        ExecutorService ex = Executors.newFixedThreadPool(2);
+        Res a, b;
+        try (java.sql.Connection ext = java.sql.DriverManager.getConnection(props.determineUrl(), props.determineUsername(), props.determinePassword())) {
+            ext.setAutoCommit(false);
+            try (var ps = ext.prepareStatement("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=? FOR UPDATE")) {
+                ps.setLong(1, material); ps.setLong(2, warehouse); ps.executeQuery().close();
+            }
+            Future<Res> fa = ex.submit(() -> post2(admin, "/api/inventory/in", in, key));
+            Thread.sleep(2600);   // 租期 2s 已过，A 仍卡着
+            Map<String, Object> rec = jdbc.queryForMap("SELECT status, owner_token FROM sys_idempotency WHERE idem_key=?", key);
+            assertThat(rec.get("status")).as("A 仍在处理").isEqualTo("PROCESSING");
+            String tokenA = (String) rec.get("owner_token");
+            Future<Res> fb = ex.submit(() -> post2(admin, "/api/inventory/in", in, key));
+            Thread.sleep(800);
+            assertThat(jdbc.queryForObject("SELECT owner_token FROM sys_idempotency WHERE idem_key=?", String.class, key))
+                    .as("B 已接管").isNotEqualTo(tokenA);
+            ext.rollback();
+            a = fa.get(30, TimeUnit.SECONDS); b = fb.get(30, TimeUnit.SECONDS);
+        } finally { ex.shutdownNow(); }
+        assertThat(a.code()).as("A").isZero();
+        assertThat(b.code()).as("B").isZero();
+        assertThat(b.data().path("id").asLong()).isEqualTo(a.data().path("id").asLong());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM inv_stock_txn WHERE remark=?", Integer.class, tag)).isEqualTo(1);
+        assertThat(new java.math.BigDecimal(jdbc.queryForObject("SELECT qty FROM inv_stock WHERE material_id=? AND warehouse_id=?", String.class, material, warehouse)))
+                .as("库存只 +1").isEqualByComparingTo("11");
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_idempotency WHERE idem_key=?", String.class, key)).isEqualTo("DONE");
+    }
+}

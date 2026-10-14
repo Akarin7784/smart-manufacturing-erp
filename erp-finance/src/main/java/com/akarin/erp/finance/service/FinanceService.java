@@ -91,6 +91,7 @@ public class FinanceService {
         p.setPaidDate(req.paidDate() == null ? LocalDate.now() : req.paidDate());
         p.setRemark(req.remark());
         p.setVersion(0);
+        com.akarin.erp.common.idem.IdemContext.apply((u, k) -> { p.setIdemUser(u); p.setIdemKey(k); });
         paymentMapper.insert(p);
         return p;
     }

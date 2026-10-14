@@ -17,6 +17,9 @@ public class SalesOrder extends BaseEntity {
     private String status;
     private BigDecimal totalAmount;
     private String remark;
+    /** 幂等键：与 Idempotency-Key 同事务写入；UNIQUE(idem_user, idem_key)，未带请求头时为 null */
+    private String idemUser;
+    private String idemKey;
     @com.baomidou.mybatisplus.annotation.Version
     private Integer version;
 }

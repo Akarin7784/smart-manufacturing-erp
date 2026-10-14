@@ -24,6 +24,9 @@ public class Payment extends BaseEntity {
     private BigDecimal appliedAmount;
     private LocalDate paidDate;
     private String remark;
+    /** 幂等键：与 Idempotency-Key 同事务写入；UNIQUE(idem_user, idem_key)，未带请求头时为 null */
+    private String idemUser;
+    private String idemKey;
     @Version
     private Integer version;
 

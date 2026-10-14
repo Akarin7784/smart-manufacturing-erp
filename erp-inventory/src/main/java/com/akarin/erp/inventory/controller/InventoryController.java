@@ -49,7 +49,7 @@ public class InventoryController {
     @PostMapping("/in")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> in(@Valid @RequestBody StockReq r, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
-        return R.ok(idem.execute(idemKey, "inventory.in", r, () -> {
+        return R.ok(idem.execute(idemKey, "inventory.in", r, "inv_stock_txn", () -> {
             service.validateChange(r.materialId(), r.warehouseId(), r.qty());
             return txRetry.run("inventory.in", com.akarin.erp.common.util.NoGenerator.reserved(
                     java.util.Map.of(InventoryService.TXN_PREFIX_IN, 1),
@@ -61,7 +61,7 @@ public class InventoryController {
     @PostMapping("/out")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> out(@Valid @RequestBody StockReq r, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
-        return R.ok(idem.execute(idemKey, "inventory.out", r, () -> {
+        return R.ok(idem.execute(idemKey, "inventory.out", r, "inv_stock_txn", () -> {
             service.validateChange(r.materialId(), r.warehouseId(), r.qty());
             return txRetry.run("inventory.out", com.akarin.erp.common.util.NoGenerator.reserved(
                     java.util.Map.of(InventoryService.TXN_PREFIX_OUT, 1),

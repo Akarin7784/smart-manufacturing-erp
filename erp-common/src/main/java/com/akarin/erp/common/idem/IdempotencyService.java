@@ -68,10 +68,24 @@ public class IdempotencyService {
             .build();
 
     private final JdbcTemplate jdbc;
+    /** PROCESSING 记录的租期（#22-9）：租期内同 key 返回 40904；过期后先按 (用户, key) 查已提交的单据，查到补成 DONE 并重放，查不到才接管 */
+    private final Duration lease;
 
-    public IdempotencyService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+    public IdempotencyService(JdbcTemplate jdbc) { this(jdbc, 60); }
 
-    record Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt) {}
+    @org.springframework.beans.factory.annotation.Autowired
+    public IdempotencyService(JdbcTemplate jdbc,
+                              @org.springframework.beans.factory.annotation.Value("${erp.idempotency.processing-lease-seconds:60}") long leaseSeconds) {
+        this.jdbc = jdbc;
+        this.lease = Duration.ofSeconds(leaseSeconds);
+    }
+
+    record Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt, LocalDateTime leaseUntil) {
+        Row(long id, String hash, String status, Long resultId, LocalDateTime expiresAt) { this(id, hash, status, resultId, expiresAt, null); }
+    }
+
+    /** 已认领的记录：行 id + 本次请求的持有者令牌（完成 / 释放都带令牌，被接管后原请求改不动记录） */
+    record Claim(long rowId, String token) {}
 
     /**
      * @param key    请求头的值，null 表示没带
@@ -80,16 +94,17 @@ public class IdempotencyService {
      * @param work   真正的创建（自己负责事务）
      * @param idOf   从结果取单据 id
      * @param load   按 id 重新读取原单据
+     * @param docTable 单据表（带 idem_user / idem_key 列及其唯一索引）：租期过期后按 (用户, key) 查是否已有提交的单据
      */
-    public <T> T execute(String key, String op, Object req, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
+    public <T> T execute(String key, String op, Object req, String docTable, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
         if (key == null) return work.get();
         if (key.isBlank() || key.length() > MAX_KEY_LENGTH)
             throw new BizException(ErrorCode.BAD_REQUEST, HEADER + " 不能为空且最多 " + MAX_KEY_LENGTH + " 个字符");
         String user = currentUser();
         String hash = hash(op, req);
         for (int round = 0; ; round++) {
-            Long claimed = tryClaim(user, key, hash);
-            if (claimed != null) return runClaimed(claimed, work, idOf);
+            Claim claimed = tryClaim(user, key, hash);
+            if (claimed != null) return runClaimed(claimed, user, key, docTable, work, idOf, load);
             Row r = find(user, key);
             if (r == null) { if (round < 3) continue; throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS); }
             if (r.expiresAt().isBefore(now())) {
@@ -105,42 +120,92 @@ public class IdempotencyService {
                 throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
             }
             if (!r.hash().equals(hash)) throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency-Key 已被使用且参数不一致");
-            if (!DONE.equals(r.status()) || r.resultId() == null) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
-            return load.apply(r.resultId());
+            if (DONE.equals(r.status()) && r.resultId() != null) return load.apply(r.resultId());
+            // PROCESSING
+            LocalDateTime now = now();
+            if (r.leaseUntil() != null && r.leaseUntil().isAfter(now)) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
+            // 租期已过：原请求可能崩溃，也可能只是慢。先查单据是否已提交（单据与 (用户, key) 同事务写入）
+            Long docId = findDocument(docTable, user, key);
+            if (docId != null) {
+                jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ? AND status = ?", DONE, docId, r.id(), PROCESSING);
+                log.info("idempotency lease expired, document already committed: rowId={} docId={}", r.id(), docId);
+                return load.apply(docId);
+            }
+            // 没有单据：条件更新接管（只有一个请求能把过期租期改成新租期）
+            String token = java.util.UUID.randomUUID().toString();
+            int taken = jdbc.update("UPDATE sys_idempotency SET owner_token = ?, lease_until = ? WHERE id = ? AND status = ? "
+                            + "AND (lease_until < ? OR (lease_until IS NULL AND created_at < ?))",
+                    token, Timestamp.valueOf(now.plus(lease)), r.id(), PROCESSING, Timestamp.valueOf(now), Timestamp.valueOf(now.minus(lease)));
+            if (taken == 1) {
+                log.warn("idempotency lease expired, taking over: rowId={}", r.id());
+                return runClaimed(new Claim(r.id(), token), user, key, docTable, work, idOf, load);
+            }
+            if (round >= 3) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
         }
     }
 
-    private <T> T runClaimed(long rowId, Supplier<T> work, Function<T, Long> idOf) {
+    /** 单据表里 (idem_user, idem_key) 对应的单据 id；表名只来自代码里的常量 */
+    Long findDocument(String docTable, String user, String key) {
+        if (!DOC_TABLES.contains(docTable)) throw new IllegalArgumentException("unknown doc table " + docTable);
+        List<Long> ids = jdbc.queryForList("SELECT id FROM " + docTable + " WHERE idem_user = ? AND idem_key = ?", Long.class, user, key);
+        return ids.isEmpty() ? null : ids.get(0);
+    }
+
+    public static final java.util.Set<String> DOC_TABLES = java.util.Set.of("pur_order", "sal_order", "inv_stock_txn", "fin_payment");
+
+    private <T> T runClaimed(Claim c, String user, String key, String docTable, Supplier<T> work, Function<T, Long> idOf, Function<Long, T> load) {
         T result;
         try {
-            result = work.get();
+            result = IdemContext.with(user, key, work);
         } catch (RuntimeException | Error e) {
-            release(rowId);
+            // 单据上 (idem_user, idem_key) 唯一：慢的原请求与接管者并发时，后提交的一方在这里撞唯一键回滚。
+            // 失败后先看同 key 的单据是否已由另一方提交：是 → 补 DONE 并返回同一张单据
+            Long docId = null;
+            try { docId = findDocument(docTable, user, key); } catch (RuntimeException ignore) { /* 按原异常处理 */ }
+            if (docId != null) {
+                markDone(c, docId, true);
+                return load.apply(docId);
+            }
+            release(c);
             throw e;
         }
-        try {
-            jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ?", DONE, idOf.apply(result), rowId);
-        } catch (RuntimeException e) {
-            // 单据已提交；标记失败时记录保持 PROCESSING，同 key 重试返回 40904 直到过期，不会重复建单
-            log.warn("idempotency mark-done failed: rowId={} exception={}", rowId, e.getClass().getName());
-        }
+        markDone(c, idOf.apply(result), false);
         return result;
     }
 
-    private void release(long rowId) {
-        try { jdbc.update("DELETE FROM sys_idempotency WHERE id = ? AND status = ?", rowId, PROCESSING); }
-        catch (RuntimeException e) { log.warn("idempotency release failed: rowId={} exception={}", rowId, e.getClass().getName()); }
+    private void markDone(Claim c, long docId, boolean byOther) {
+        try {
+            // 不带令牌条件：单据已提交且 (用户, key) 唯一，记成 DONE 总是对的；令牌只用于判断是否被接管（记日志）
+            int n = jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ? AND owner_token = ?", DONE, docId, c.rowId(), c.token());
+            if (n == 0) {
+                jdbc.update("UPDATE sys_idempotency SET status = ?, result_id = ? WHERE id = ?", DONE, docId, c.rowId());
+                log.warn("idempotency record was taken over before mark-done: rowId={} docId={}", c.rowId(), docId);
+            } else if (byOther) {
+                log.warn("idempotency key committed by the other request, replaying: rowId={} docId={}", c.rowId(), docId);
+            }
+        } catch (RuntimeException e) {
+            // 单据已提交；记录停在 PROCESSING，租期过后按 (用户, key) 查到单据补成 DONE，不会重复建单
+            log.warn("idempotency mark-done failed: rowId={} exception={}", c.rowId(), e.getClass().getName());
+        }
     }
 
-    private Long tryClaim(String user, String key, String hash) {
+    /** 失败释放：只删自己持有的记录（被接管后原请求失败不会删掉接管者的占位） */
+    private void release(Claim c) {
+        try { jdbc.update("DELETE FROM sys_idempotency WHERE id = ? AND status = ? AND owner_token = ?", c.rowId(), PROCESSING, c.token()); }
+        catch (RuntimeException e) { log.warn("idempotency release failed: rowId={} exception={}", c.rowId(), e.getClass().getName()); }
+    }
+
+    private Claim tryClaim(String user, String key, String hash) {
         LocalDateTime now = now();
+        String token = java.util.UUID.randomUUID().toString();
         GeneratedKeyHolder kh = new GeneratedKeyHolder();
         try {
             jdbc.update(c -> {
-                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                PreparedStatement ps = c.prepareStatement("INSERT INTO sys_idempotency (user_name, idem_key, req_hash, status, created_at, expires_at, owner_token, lease_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         Statement.RETURN_GENERATED_KEYS);
                 ps.setString(1, user); ps.setString(2, key); ps.setString(3, hash); ps.setString(4, PROCESSING);
                 ps.setTimestamp(5, Timestamp.valueOf(now)); ps.setTimestamp(6, Timestamp.valueOf(now.plus(TTL)));
+                ps.setString(7, token); ps.setTimestamp(8, Timestamp.valueOf(now.plus(lease)));
                 return ps;
             }, kh);
         } catch (DuplicateKeyException e) {
@@ -148,13 +213,14 @@ public class IdempotencyService {
         }
         List<Map<String, Object>> keys = kh.getKeyList();
         Object id = keys.isEmpty() ? null : keys.get(0).values().iterator().next();
-        return ((Number) id).longValue();
+        return new Claim(((Number) id).longValue(), token);
     }
 
     private Row find(String user, String key) {
-        List<Row> l = jdbc.query("SELECT id, req_hash, status, result_id, expires_at FROM sys_idempotency WHERE user_name = ? AND idem_key = ?",
+        List<Row> l = jdbc.query("SELECT id, req_hash, status, result_id, expires_at, lease_until FROM sys_idempotency WHERE user_name = ? AND idem_key = ?",
                 (rs, i) -> new Row(rs.getLong(1), rs.getString(2), rs.getString(3),
-                        rs.getObject(4) == null ? null : rs.getLong(4), rs.getTimestamp(5).toLocalDateTime()), user, key);
+                        rs.getObject(4) == null ? null : rs.getLong(4), rs.getTimestamp(5).toLocalDateTime(),
+                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toLocalDateTime()), user, key);
         return l.isEmpty() ? null : l.get(0);
     }
 

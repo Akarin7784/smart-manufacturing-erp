@@ -111,6 +111,7 @@ public class InventoryService {
         t.setDirection(dir); t.setMaterialId(materialId); t.setWarehouseId(warehouseId);
         t.setQty(qty); t.setBalanceAfter(after);
         t.setBizType(bizType == null ? "MANUAL" : bizType); t.setBizNo(bizNo); t.setRemark(remark);
+        com.akarin.erp.common.idem.IdemContext.apply((u, k) -> { t.setIdemUser(u); t.setIdemKey(k); });
         txnMapper.insert(t);
         return t;
     }

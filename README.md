@@ -233,7 +233,7 @@ ALTER TABLE wf_process_def  ADD COLUMN version INT NOT NULL DEFAULT 0;
 | 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`：被订单、库存、应收应付单、收付款引用 |
 | 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |；`Idempotency-Key` 复用但请求参数不同，或同一 key 用在别的创建接口（#22）
 | 409 | 40903 | 单据状态已变更，提示"单据状态已变更，请刷新后重试" | `PUT /api/purchase/orders/{id}`、`PUT /api/sales/orders/{id}`：订单已不是草稿（读出时已不是草稿，或并发提交/审批导致定向更新影响 0 行后重读发现不是草稿）。参数校验和引用检查（供应商/客户、仓库、物料是否存在）先于状态判断：非法输入一律 400 |
-| 409 | 40904 | 请求处理中，请稍后重试 | 带 `Idempotency-Key` 的创建请求，同一用户同一 key 的上一次请求还没处理完（并发重复提交）；稍后用同一 key 重试会拿到原单据 |
+| 409 | 40904 | 请求处理中，请稍后重试 | 带 `Idempotency-Key` 的创建请求，同一用户同一 key 的上一次请求还在处理且租期未过（并发重复提交）；租期过后同 key 会查已提交单据并重放，或接管后创建 |
 | 500 | 500 | 系统异常 | 未预期的异常 |
 | 503 | 50301 | 取号繁忙，请稍后重试 | 创建单据（采购单、销售单、手工出入库、收付款）及收货/发货时取单据号超时：取号连接池 1 秒内拿不到连接，或序号行锁死锁/等待超时且就地重试后仍失败（例如被外部会话锁住；最坏约 4 秒，常见约 2 秒）。此时还没开业务事务、没写任何数据，可直接重试；带 `Idempotency-Key` 时用同一 key 重试 |
 
@@ -329,16 +329,25 @@ mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率�
 - 请求失败（含 400、503/50301、500）：占位记录删除，key 不被占用，用同一 key 重试会正常创建且只建一张。
 - 同一用户同一 key 并发提交只会生成一张单据（唯一索引占位）。
 - 记录保留 24 小时，过期的 key 视为新 key；每小时清理一次过期记录。占位时遇到过期记录会先删除再占位，删除失败时返回 **409 / 40904**（稍后重试），不会拿过期记录比对（#22-11）。
-- 已知限制：单据已提交但“标记完成”这一步失败（例如进程在两步之间崩溃）时，记录停在处理中，同 key 在 24 小时内返回 40904，不会重复建单。
+- PROCESSING 记录有租期 `erp.idempotency.processing-lease-seconds`（默认 60 秒）：租期内同 key 返回 **409 / 40904**；租期过后：
+  1. 先按单据上的 `(idem_user, idem_key)` 查是否已有提交的单据——有则把记录补成 DONE 并重放（单据与幂等键同事务写入，崩溃也不会丢）；
+  2. 没有则条件更新接管（只改过期租期，只有一个请求能改到），再创建。
+  慢但还活着的原请求与接管者并发时，单据表 `UNIQUE (idem_user, idem_key)` 保证只落一张；后提交的一方撞唯一键回滚，查到已提交的单据后重放同一张。
+- 单据列 `idem_user` / `idem_key`（采购单、销售单、库存流水、收付款）：未带 `Idempotency-Key` 时为 null（唯一索引允许多个 null）。已有 MySQL 库由启动时的 `SchemaUpgrade` 自动 `ADD COLUMN` / `ADD UNIQUE KEY`（幂等），README 也给了手工 DDL。
 - 核销接口的 `requestNo` 幂等不变。
 
-已有 MySQL 库手工建表（启动时也会 `CREATE TABLE IF NOT EXISTS`）：
+已有 MySQL 库手工建表 / 补列（启动时 `SchemaUpgrade` 也会幂等执行）：
 ```sql
 CREATE TABLE IF NOT EXISTS sys_idempotency (
   id BIGINT AUTO_INCREMENT PRIMARY KEY, user_name VARCHAR(64) NOT NULL, idem_key VARCHAR(128) NOT NULL,
   req_hash CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, result_id BIGINT,
-  created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL,
+  created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL, owner_token VARCHAR(64), lease_until DATETIME,
   UNIQUE KEY uk_idem_user_key (user_name, idem_key), INDEX idx_idem_expires (expires_at));
+ALTER TABLE sys_idempotency ADD COLUMN owner_token VARCHAR(64), ADD COLUMN lease_until DATETIME; -- 已有表
+ALTER TABLE pur_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pur_idem (idem_user, idem_key);
+ALTER TABLE sal_order ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_sal_idem (idem_user, idem_key);
+ALTER TABLE inv_stock_txn ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_txn_idem (idem_user, idem_key);
+ALTER TABLE fin_payment ADD COLUMN idem_user VARCHAR(64), ADD COLUMN idem_key VARCHAR(128), ADD UNIQUE KEY uk_pay_idem (idem_user, idem_key);
 ```
 
 **日志**：回滚失败且没有原始异常时，整个请求只记一条简短 ERROR（TxRetry 记过的，全局处理器不再记）；堆栈只在 `GlobalExceptionHandler` 的 DEBUG 级别输出。
