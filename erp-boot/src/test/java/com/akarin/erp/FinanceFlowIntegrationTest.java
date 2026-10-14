@@ -26,7 +26,7 @@ class FinanceFlowIntegrationTest {
     String token;
 
     @BeforeEach void login() throws Exception {
-        token = call("POST", "/api/auth/login", "{\"username\":\"admin\",\"password\":\"admin123\"}", false).path("data").path("token").asText();
+        token = call("POST", "/api/auth/login", "{\"username\":\"admin\",\"password\":\"" + TestCredentials.ADMIN_PASSWORD + "\"}", false).path("data").path("token").asText();
     }
 
     JsonNode call(String method, String url, String body, boolean auth) throws Exception {

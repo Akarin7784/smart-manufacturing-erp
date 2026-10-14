@@ -92,7 +92,7 @@ class OrderEditSubmitRaceMySqlTest extends ApiTestSupport {
     @BeforeEach void setUp() throws Exception {
         hookTx = new TransactionTemplate(txm);
         hookTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
-        String pw = System.getenv().getOrDefault("ERP_ADMIN_PASSWORD", "admin123");
+        String pw = TestCredentials.ADMIN_PASSWORD;
         admin = login("admin", pw);
         assertThat(admin).as("admin 登录（密码取 ERP_ADMIN_PASSWORD）").isNotBlank();
         String iso = jdbc.queryForObject("SELECT @@transaction_isolation", String.class);

@@ -85,6 +85,15 @@ public class GlobalExceptionHandler {
         return of(ErrorCode.CONCURRENT_MODIFICATION, ErrorCode.CONCURRENT_MODIFICATION.getDefaultMsg());
     }
 
+    /** 未归类的 SQL 异常：保持 500；日志只记异常类、SQLState、错误码，不记 SQL 与参数（异常消息里带 SQL） */
+    @ExceptionHandler(org.springframework.jdbc.UncategorizedSQLException.class)
+    public ResponseEntity<R<Void>> uncategorizedSql(org.springframework.jdbc.UncategorizedSQLException e) {
+        java.sql.SQLException s = e.getSQLException();
+        log.error("uncategorized SQL error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> other(Exception e) {
         log.error("unexpected", e);

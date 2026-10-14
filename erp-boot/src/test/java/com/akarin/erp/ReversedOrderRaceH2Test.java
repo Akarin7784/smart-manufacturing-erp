@@ -12,6 +12,6 @@ import org.springframework.context.annotation.Import;
 @Import(ReversedOrderRaceSupport.Hook.class)
 class ReversedOrderRaceH2Test extends ReversedOrderRaceSupport {
     @Test void reversedOrderReceiveAndShipNoDeadlock() throws Exception {
-        reversedOrderRace(login("admin", "admin123"));
+        reversedOrderRace(loginAdmin());
     }
 }

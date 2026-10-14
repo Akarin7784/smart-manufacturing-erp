@@ -56,7 +56,7 @@ class ConcurrentSettlementIntegrationTest extends ApiTestSupport {
 
     String t;
 
-    @BeforeEach void setUp() throws Exception { t = login("admin", "admin123"); apr = login("approver", "approver123"); }
+    @BeforeEach void setUp() throws Exception { t = loginAdmin(); apr = login("approver", "approver123"); }
     String apr;   // 申请人不能审批自己的单据
     @AfterEach void tearDown() { gate = null; gateBillId = null; }
 
