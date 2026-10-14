@@ -173,7 +173,7 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
             ok(admin, "POST", "/api/" + type + "/orders/" + id + "/submit", null);
             assertThat(ok(admin, "GET", "/api/" + type + "/orders?status=PENDING", null).path("total").asInt()).isPositive();
             assertThat(ok(admin, "GET", "/api/" + type + "/orders", null).path("total").asInt()).isPositive();
-            assertThat(code(admin, "GET", "/api/" + type + "/orders/999999", null)).isEqualTo(400);
+            assertThat(code(admin, "GET", "/api/" + type + "/orders/999999", null)).isEqualTo(404);
         }
     }
 

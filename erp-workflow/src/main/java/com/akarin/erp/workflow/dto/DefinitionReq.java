@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 public record DefinitionReq(@NotBlank @Size(max = 64) String name, Boolean enabled,
+                            Integer version,
                             @NotEmpty @Valid List<Node> nodes) {
     public record Node(@NotBlank @Size(max = 64) String name,
                        @NotBlank @Size(max = 64) String roleCode,

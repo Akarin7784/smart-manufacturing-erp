@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -24,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @AutoConfigureMockMvc
 class WorkflowIntegrationTest extends SysTestSupport {
     @Autowired ProcessDefMapper processMapper;
+    @Autowired JdbcTemplate jdbc;
     @Autowired NodeDefMapper nodeMapper;
 
     Role mgr, fin, gm;
@@ -36,7 +38,7 @@ class WorkflowIntegrationTest extends SysTestSupport {
         buyer = user(buyerRole); m1 = user(mgr); f1 = user(fin); f2 = user(fin); g1 = user(gm);
         sup = mdm(admin, "suppliers", "S"); wh = mdm(admin, "warehouses", "W"); mat = mdm(admin, "materials", "M");
         // 采购：部门经理（或签）→ 财务（会签，2 人）→ 金额 > 1000 时总经理（或签）
-        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{\"name\":\"采购审批\",\"nodes\":[" +
+        putDef("{\"name\":\"采购审批\",\"nodes\":[" +
                 "{\"name\":\"部门经理\",\"roleCode\":\"" + mgr.code() + "\",\"approveMode\":\"ANY\"}," +
                 "{\"name\":\"财务会签\",\"roleCode\":\"" + fin.code() + "\",\"approveMode\":\"ALL\"}," +
                 "{\"name\":\"总经理\",\"roleCode\":\"" + gm.code() + "\",\"approveMode\":\"ANY\",\"minAmount\":1000}]}");
@@ -44,6 +46,7 @@ class WorkflowIntegrationTest extends SysTestSupport {
 
     /** 直接删定义，避免影响同一 JVM 内其他测试（它们走默认单级审批） */
     @AfterEach void dropDefinition() {
+        jdbc.update("UPDATE wf_approval_instance SET status='CANCELLED' WHERE status='PENDING' AND biz_type='PURCHASE_ORDER'");
         ProcessDef p = processMapper.selectOne(new LambdaQueryWrapper<ProcessDef>().eq(ProcessDef::getBizType, "PURCHASE_ORDER"));
         if (p != null) {
             nodeMapper.delete(new LambdaQueryWrapper<NodeDef>().eq(NodeDef::getProcessId, p.getId()));
@@ -58,6 +61,18 @@ class WorkflowIntegrationTest extends SysTestSupport {
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":" + qty + ",\"price\":" + price + "}]}").path("order").path("id").asLong();
         long ap = ok(bt, "POST", "/api/purchase/orders/" + id + "/submit", null).path("approvalId").asLong();
         return new Order(id, ap);
+    }
+
+
+    /** PUT 流程定义：已存在时自动带上当前 version */
+    void putDef(String bodyWithoutVersion) throws Exception {
+        var g = call(admin, "GET", "/api/workflow/definitions/PURCHASE_ORDER", null);
+        String body = bodyWithoutVersion;
+        if (g.path("code").asInt() == 0) {
+            int v = g.path("data").path("process").path("version").asInt();
+            body = "{\"version\":" + v + "," + bodyWithoutVersion.substring(1);
+        }
+        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", body);
     }
 
     JsonNode decide(String t, long ap, boolean approved) throws Exception {
@@ -162,7 +177,7 @@ class WorkflowIntegrationTest extends SysTestSupport {
         // 申请人不进会签名单：只有申请人自己具备某节点角色时提交被拒
         Role solo = role("SOLO");
         User only = user(mixed, solo);
-        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{\"name\":\"x\",\"nodes\":[{\"name\":\"唯一\",\"roleCode\":\"" + solo.code() + "\",\"approveMode\":\"ALL\"}]}");
+        putDef("{\"name\":\"x\",\"nodes\":[{\"name\":\"唯一\",\"roleCode\":\"" + solo.code() + "\",\"approveMode\":\"ALL\"}]}");
         long id = ok(only.token(this), "POST", "/api/purchase/orders", "{\"supplierId\":" + sup + ",\"warehouseId\":" + wh +
                 ",\"items\":[{\"materialId\":" + mat + ",\"qty\":1,\"price\":1}]}").path("order").path("id").asLong();
         JsonNode r = call(only.token(this), "POST", "/api/purchase/orders/" + id + "/submit", null);
@@ -214,10 +229,10 @@ class WorkflowIntegrationTest extends SysTestSupport {
         decide(m1.token(this), o.approvalId(), false);
 
         // 所有节点都带金额条件且不满足 → 提交被拒
-        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{\"name\":\"大额\",\"nodes\":[{\"name\":\"GM\",\"roleCode\":\"" + gm.code() + "\",\"approveMode\":\"ANY\",\"minAmount\":100000}]}");
+        putDef("{\"name\":\"大额\",\"nodes\":[{\"name\":\"GM\",\"roleCode\":\"" + gm.code() + "\",\"approveMode\":\"ANY\",\"minAmount\":100000}]}");
         assertThat(code(buyer.token(this), "POST", "/api/purchase/orders/" + o.id() + "/submit", null)).isEqualTo(400);
         // 停用流程 → 回退默认单级审批（workflow:approve）
-        ok(admin, "PUT", "/api/workflow/definitions/PURCHASE_ORDER", "{\"name\":\"停用\",\"enabled\":false,\"nodes\":[{\"name\":\"GM\",\"roleCode\":\"" + gm.code() + "\",\"approveMode\":\"ANY\"}]}");
+        putDef("{\"name\":\"停用\",\"enabled\":false,\"nodes\":[{\"name\":\"GM\",\"roleCode\":\"" + gm.code() + "\",\"approveMode\":\"ANY\"}]}");
         long ap = ok(buyer.token(this), "POST", "/api/purchase/orders/" + o.id() + "/submit", null).path("approvalId").asLong();
         assertThat(decide(admin, ap, true).path("data").path("status").asText()).isEqualTo("APPROVED");
         ok(admin, "DELETE", "/api/workflow/definitions/PURCHASE_ORDER", null);
