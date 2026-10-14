@@ -9,7 +9,7 @@
 | [`error-codes.md`](error-codes.md) | 数字码 ↔ problem type ↔ 含义 ↔ 重试策略 |
 
 来源：MES 提案 [smart-manufacturing-cloud#86](https://github.com/Akarin7784/smart-manufacturing-cloud/pull/86)
-（`docs/api/erp-integration-openapi.yaml`、`docs/erp-mes-integration-design.md`，head `4d88a0c`）。
+（`docs/api/erp-integration-openapi.yaml`、`docs/erp-mes-integration-design.md`，head `5522bf9`）。
 路径和字段沿用该提案，与下面 PM 定稿冲突处以本目录为准。
 
 ## 0. PM 定稿（覆盖 MES 提案）
@@ -81,12 +81,11 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | `productCode` / `materialCode` | `product` / 物料编码 | mdm 物料编码 | 两边编码一致，不做转换 |
 | `quantity` | 改为 6 位小数 | `DECIMAL(18,6)` | 字符串传输，最多 6 位小数；ERP 下达固定 6 位 |
 | `uom` | 新增 | 物料计量单位 | 必须与物料主单位一致，否则 400 |
-| `warehouseCode` | 透传 | 仓库编码 | 完工入库默认取下达时的仓；报废需显式传（ERP 定稿新增） |
+| `warehouseCode` | 透传 | 仓库编码 | **三个回调（领料 / 完工入库 / 报废）都必填**，不取下达时的默认仓；缺失 → 400 / 400。下达请求中的 `warehouseCode` 可选，仅作参考 |
 | `deviceId` | 可选 | **不传** | 设备由 MES 下达后分配 |
 | `occurredAt` | 发生时间 | 单据业务日期 | ISO-8601 带时区；ERP 单据日期按北京时间换算 |
 | `reasonCode` | 报废原因 | 报废原因字典 `SCRAP_REASON` | 字符串，按 ERP 字典校验，不在字典 → 400 / 400；契约不写死枚举。字典在 ERP 主数据维护（实现 PR 新增，初始值 PROCESS_DEFECT / MATERIAL_DEFECT / EQUIPMENT / OTHER），MES 同步该字典 |
 | `operationNo` / `reportId` | 报工工序 / 报工记录 ID | 领料单追溯字段 | 仅领料，必填 |
-| `warehouseCode`（报废） | 透传 | 仓库编码 | 报废必填 |
 
 ## 6. 错误
 
@@ -132,6 +131,7 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | B17 | 报废 `reasonCode` 不在 `SCRAP_REASON` 字典 | 400 / 400，不落库 |
 | B18 | 领料缺 `operationNo` 或 `reportId` | 400 / 400 |
 | B19 | 下达：同 `Idempotency-Key` 不同请求体 | 409 / 40902（不是 422） |
+| B20 | 任一回调缺 `warehouseCode` | 400 / 400，不落库 |
 
 所有数量字段（下达、领料行、完工入库、报废）共用 `Decimal6`：最多 6 位小数，超过 → 400，不舍入（B8 对所有回调和下达都适用）。
 

@@ -1,5 +1,5 @@
 # ERP ↔ MES M2 集成契约（唯一事实来源，仅契约，无实现）。
-# 来源：MES 提案 Akarin7784/smart-manufacturing-cloud#86（docs/api/erp-integration-openapi.yaml @ 4d88a0c），
+# 来源：MES 提案 Akarin7784/smart-manufacturing-cloud#86（docs/api/erp-integration-openapi.yaml @ 5522bf9），
 # 按 PM 定稿覆盖冲突项（见 README.md §0）。改动须走 PR，由 PM 审查。
 openapi: 3.1.0
 info:
@@ -481,7 +481,7 @@ components:
         materialCode: {type: string, maxLength: 128}
         quantity: {$ref: '#/components/schemas/Decimal6'}
         uom: {type: string, maxLength: 16}
-        warehouseCode: {type: string, maxLength: 32, description: '报废出库仓（MES PR 86 无此字段，ERP 定稿新增）。'}
+        warehouseCode: {type: string, maxLength: 32, description: 报废出库仓，必填。}
         reasonCode: {type: string, maxLength: 32, description: '报废原因码，按 ERP 报废原因字典（SCRAP_REASON）校验，不在字典 → 400 / 400。契约不写死枚举。'}
         operationNo: {type: [string, 'null'], maxLength: 16}
         occurredAt: {type: string, format: date-time}
@@ -496,7 +496,7 @@ components:
         uom: {type: string, maxLength: 16}
         plannedStartDate: {type: string, format: date}
         plannedFinishDate: {type: string, format: date}
-        warehouseCode: {type: string, maxLength: 32, description: 完工入库默认仓。}
+        warehouseCode: {type: string, maxLength: 32, description: 可选，仅作参考；回调必须显式传 warehouseCode。}
         remark: {type: string, maxLength: 256}
     DispatchProductionOrderResponse:
       type: object
