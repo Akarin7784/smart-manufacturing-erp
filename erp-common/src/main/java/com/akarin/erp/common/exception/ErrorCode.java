@@ -18,7 +18,9 @@ public enum ErrorCode {
     MASTER_DATA_REFERENCED(409, 40901, "主数据已被单据引用，不能删除，只能停用"),
     IDEMPOTENCY_KEY_REUSED(409, 40902, "请求号已被使用且参数不一致"),
     ORDER_STATUS_CHANGED(409, 40903, "单据状态已变更，请刷新后重试"),
-    INTERNAL_ERROR(500, 500, "系统异常");
+    IDEMPOTENCY_IN_PROGRESS(409, 40904, "请求处理中，请稍后重试"),
+    INTERNAL_ERROR(500, 500, "系统异常"),
+    DOC_NO_BUSY(503, 50301, "取号繁忙，请稍后重试");
 
     private final int httpStatus;
     private final int code;

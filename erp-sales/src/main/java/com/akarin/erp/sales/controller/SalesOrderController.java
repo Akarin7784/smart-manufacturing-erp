@@ -22,6 +22,7 @@ public class SalesOrderController {
     private final SalesOrderService service;
     /** 最外层整事务重试（仅死锁/锁等待超时）；service 方法本身是 @Transactional，每次重试都是新事务 */
     private final com.akarin.erp.common.tx.TxRetry txRetry;
+    private final com.akarin.erp.common.idem.IdempotencyService idem;
 
     @GetMapping
     public R<Page<SalesOrder>> page(@RequestParam(defaultValue = "1") long page, @RequestParam(defaultValue = "20") long size,
@@ -35,7 +36,13 @@ public class SalesOrderController {
 
     @PostMapping
     @PreAuthorize("hasAuthority('sales:write')")
-    public R<SalesOrderDetail> create(@Valid @RequestBody SalesOrderCreateReq req) { return R.ok(service.create(req)); }
+    public R<SalesOrderDetail> create(@Valid @RequestBody SalesOrderCreateReq req, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
+        // 顺序（#22）：@Valid → 幂等占位 → 业务校验 → 取号（独立取号池）→ 业务事务
+        return R.ok(idem.execute(idemKey, "sales.order.create", req, () -> {
+            service.validateCreate(req);
+            return com.akarin.erp.common.util.NoGenerator.reserveThen(Map.of("SO", 1), () -> service.create(req));
+        }, d -> d.order().getId(), service::detail));
+    }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAuthority('sales:write')")
@@ -51,5 +58,6 @@ public class SalesOrderController {
 
     @PostMapping("/{id}/ship")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(txRetry.run(() -> service.ship(id))); }
+    public R<SalesOrderDetail> ship(@PathVariable Long id) { return R.ok(txRetry.run("sales.ship#" + id,
+            com.akarin.erp.common.util.NoGenerator.reserved(service.shipNumbers(id), () -> service.ship(id)))); }
 }

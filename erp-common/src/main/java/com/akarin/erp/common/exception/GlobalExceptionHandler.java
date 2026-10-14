@@ -85,6 +85,31 @@ public class GlobalExceptionHandler {
         return of(ErrorCode.CONCURRENT_MODIFICATION, ErrorCode.CONCURRENT_MODIFICATION.getDefaultMsg());
     }
 
+    /** 未归类的 SQL 异常：保持 500；日志只记异常类、SQLState、错误码，不记 SQL 与参数（异常消息里带 SQL） */
+    @ExceptionHandler(org.springframework.jdbc.UncategorizedSQLException.class)
+    public ResponseEntity<R<Void>> uncategorizedSql(org.springframework.jdbc.UncategorizedSQLException e) {
+        java.sql.SQLException s = e.getSQLException();
+        if (!com.akarin.erp.common.tx.TxRetry.alreadyLogged(e))
+            log.error("uncategorized SQL error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                    s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        log.debug("uncategorized SQL error (stack)", e);
+        return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
+    }
+
+    /** 回滚/提交本身失败且没有可用的原始异常（TxRetry 已判定不是锁冲突）：500，简短 ERROR，不带 SQL 与堆栈 */
+    @ExceptionHandler(org.springframework.transaction.TransactionSystemException.class)
+    public ResponseEntity<R<Void>> txSystem(org.springframework.transaction.TransactionSystemException e) {
+        java.sql.SQLException s = null;
+        for (Throwable t = e; t != null && s == null; t = t.getCause() == t ? null : t.getCause())
+            if (t instanceof java.sql.SQLException x) s = x;
+        // #22-6：经 TxRetry 的请求已记过一条简短 ERROR，这里不再重复；#22-4：堆栈只在 DEBUG
+        if (!com.akarin.erp.common.tx.TxRetry.alreadyLogged(e))
+            log.error("transaction system error: exception={} sqlState={} errorCode={}", e.getClass().getName(),
+                    s == null ? null : s.getSQLState(), s == null ? null : s.getErrorCode());
+        log.debug("transaction system error (stack)", e);
+        return of(ErrorCode.INTERNAL_ERROR, ErrorCode.INTERNAL_ERROR.getDefaultMsg());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<R<Void>> other(Exception e) {
         log.error("unexpected", e);

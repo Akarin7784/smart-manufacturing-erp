@@ -99,7 +99,7 @@ class SysAdminIntegrationTest extends SysTestSupport {
         List<java.util.Map<String, Object>> orig = jdbc.queryForList("SELECT role_id, permission_id FROM sys_role_permission WHERE role_id = 1");
         try {
             jdbc.update("DELETE FROM sys_role_permission WHERE role_id = 1");
-            String t = login("admin", "admin123");
+            String t = loginAdmin();
             assertThat(ok(t, "GET", "/api/auth/me", null).path("authorities").toString()).doesNotContain("sys:read").contains("ROLE_ADMIN");
             assertThat(code(t, "GET", "/api/sys/users", null)).isZero();
             assertThat(code(t, "POST", "/api/sys/roles", "{\"code\":\"" + uniq("LOCK").toUpperCase() + "\",\"name\":\"x\"}")).isZero();

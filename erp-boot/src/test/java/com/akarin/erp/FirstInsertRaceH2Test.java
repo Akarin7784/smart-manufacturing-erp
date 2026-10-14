@@ -10,6 +10,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 @AutoConfigureMockMvc
 class FirstInsertRaceH2Test extends FirstInsertRaceSupport {
     @Test void concurrentFirstStockInBothSucceed() throws Exception {
-        firstReceiveRace(login("admin", "admin123"));
+        firstReceiveRace(loginAdmin());
     }
 }

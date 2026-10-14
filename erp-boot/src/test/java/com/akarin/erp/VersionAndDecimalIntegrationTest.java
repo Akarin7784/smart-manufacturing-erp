@@ -26,7 +26,7 @@ class VersionAndDecimalIntegrationTest extends SysTestSupport {
             assertThat(noVer.path("code").asInt()).isEqualTo(400);
             assertThat(noVer.path("msg").asText()).startsWith("version 不能为空");
             // 两个会话拿同一个 version：先提交的成功，后提交的 40900
-            String s1 = login("admin", "admin123"), s2 = login("admin", "admin123");
+            String s1 = loginAdmin(), s2 = loginAdmin();
             int v = detail.path("version").asInt();
             JsonNode first = call(s1, "PUT", url, "{\"name\":\"会话一\",\"version\":" + v + "}");
             assertThat(first.path("code").asInt()).isZero();

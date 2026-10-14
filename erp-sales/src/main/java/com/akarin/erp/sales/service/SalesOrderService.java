@@ -44,6 +44,25 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
     private final InventoryService inventoryService;
     private final ApplicationEventPublisher publisher;
 
+    /** 创建前的输入校验，不开事务、不取号（#22：先校验，再取号，再拿业务连接/开事务） */
+    public void validateCreate(SalesOrderCreateReq req) {
+        customerService.requireRef(req.customerId());
+        warehouseService.requireRef(req.warehouseId());
+        totalOf(buildItems(req.items().stream().map(l -> new Line(l.materialId(), l.qty(), l.price())).toList()));
+    }
+
+    /**
+     * ship 需要的单号（事务外预取，#22）：库存流水每个合并后的物料一个，加一个AR单号。
+     * 先判状态，非 APPROVED 直接 400，不浪费号；事务内仍会再判一次。
+     */
+    public java.util.Map<String, Integer> shipNumbers(Long id) {
+        SalesOrderDetail d = detail(id);
+        if (!"APPROVED".equals(d.order().getStatus()))
+            throw new BizException("仅已审批单据可执行该操作，当前: " + d.order().getStatus());
+        int n = (int) d.items().stream().map(SalesOrderItem::getMaterialId).distinct().count();
+        return java.util.Map.of(InventoryService.TXN_PREFIX_OUT, n, "AR", 1);
+    }
+
     @Transactional
     public SalesOrderDetail create(SalesOrderCreateReq req) {
         customerService.requireRef(req.customerId());
@@ -144,10 +163,11 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
                 .set(SalesOrder::getUpdatedAt, LocalDateTime.now())
                 .setSql("version = version + 1")));
         d.order().setStatus("SHIPPED");
-        for (var it : d.items()) {
-            inventoryService.stockOut(it.getMaterialId(), d.order().getWarehouseId(), it.getQty(),
-                    "SALES_SHIPMENT", d.order().getOrderNo(), null);
-        }
+        // 合并同物料行、按 (materialId, warehouseId) 固定顺序加锁，避免正反序单据并发死锁；流水按合并后的物料各一条
+        inventoryService.stockOutAll(d.items().stream()
+                .map(it -> new com.akarin.erp.inventory.service.InventoryService.StockLine(
+                        it.getMaterialId(), d.order().getWarehouseId(), it.getQty()))
+                .toList(), "SALES_SHIPMENT", d.order().getOrderNo());
         BigDecimal amount = Money.sum(d.items().stream().map(i -> Money.lineAmount(i.getQty(), i.getPrice())).toList());
         publisher.publishEvent(new StockBizCompletedEvent(StockBizCompletedEvent.SALES_SHIPMENT,
                 d.order().getOrderNo(), d.order().getCustomerId(), amount));

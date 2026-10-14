@@ -20,7 +20,7 @@ class QueryAndPermissionIntegrationTest extends ApiTestSupport {
     @Autowired PasswordEncoder encoder;
     String admin;
 
-    @BeforeEach void setUp() throws Exception { admin = login("admin", "admin123"); }
+    @BeforeEach void setUp() throws Exception { admin = loginAdmin(); }
 
     @Test void financeQueriesWithAndWithoutFilters() throws Exception {
         for (String url : new String[]{"/api/finance/bills", "/api/finance/bills?billType=AP&partnerId=1&status=OPEN&sourceBizNo=X",

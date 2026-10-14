@@ -20,6 +20,9 @@ abstract class ApiTestSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper om;
 
+    /** admin 登录，密码见 {@link TestCredentials#ADMIN_PASSWORD} */
+    String loginAdmin() throws Exception { return login("admin", TestCredentials.ADMIN_PASSWORD); }
+
     String login(String username, String password) throws Exception {
         return call(null, "POST", "/api/auth/login",
                 "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}").path("data").path("token").asText();

@@ -14,6 +14,6 @@ import org.springframework.test.context.ActiveProfiles;
 @AutoConfigureMockMvc
 class FirstInsertRaceMySqlTest extends FirstInsertRaceSupport {
     @Test void concurrentFirstStockInBothSucceed() throws Exception {
-        firstReceiveRace(login("admin", System.getenv().getOrDefault("ERP_ADMIN_PASSWORD", "admin123")));
+        firstReceiveRace(login("admin", TestCredentials.ADMIN_PASSWORD));
     }
 }

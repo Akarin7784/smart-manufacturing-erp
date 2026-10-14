@@ -24,6 +24,7 @@ public class InventoryController {
     private final InventoryService service;
     /** 最外层整事务重试（仅死锁/锁等待超时）；service 方法本身是 @Transactional，每次重试都是新事务 */
     private final com.akarin.erp.common.tx.TxRetry txRetry;
+    private final com.akarin.erp.common.idem.IdempotencyService idem;
     private final StockMapper stockMapper;
     private final StockTxnMapper txnMapper;
 
@@ -47,14 +48,24 @@ public class InventoryController {
     /** 手工入库（其他入库） */
     @PostMapping("/in")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<StockTxn> in(@Valid @RequestBody StockReq r) {
-        return R.ok(txRetry.run(() -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+    public R<StockTxn> in(@Valid @RequestBody StockReq r, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
+        return R.ok(idem.execute(idemKey, "inventory.in", r, () -> {
+            service.validateChange(r.materialId(), r.warehouseId(), r.qty());
+            return txRetry.run("inventory.in", com.akarin.erp.common.util.NoGenerator.reserved(
+                    java.util.Map.of(InventoryService.TXN_PREFIX_IN, 1),
+                    () -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+        }, StockTxn::getId, txnMapper::selectById));
     }
 
     /** 手工出库（其他出库） */
     @PostMapping("/out")
     @PreAuthorize("hasAuthority('inventory:write')")
-    public R<StockTxn> out(@Valid @RequestBody StockReq r) {
-        return R.ok(txRetry.run(() -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+    public R<StockTxn> out(@Valid @RequestBody StockReq r, @RequestHeader(value = com.akarin.erp.common.idem.IdempotencyService.HEADER, required = false) String idemKey) {
+        return R.ok(idem.execute(idemKey, "inventory.out", r, () -> {
+            service.validateChange(r.materialId(), r.warehouseId(), r.qty());
+            return txRetry.run("inventory.out", com.akarin.erp.common.util.NoGenerator.reserved(
+                    java.util.Map.of(InventoryService.TXN_PREFIX_OUT, 1),
+                    () -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
+        }, StockTxn::getId, txnMapper::selectById));
     }
 }

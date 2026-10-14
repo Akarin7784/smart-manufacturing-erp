@@ -169,6 +169,10 @@ CREATE TABLE IF NOT EXISTS wf_approval_record (
 ALTER TABLE mdm_material MODIFY created_at DATETIME DEFAULT CURRENT_TIMESTAMP, MODIFY updated_at DATETIME DEFAULT CURRENT_TIMESTAMP;
 -- mdm_customer / mdm_supplier / mdm_warehouse 等其他表同理
 ```
+从 #18 起单号用数据库序列表（启动时 `CREATE TABLE IF NOT EXISTS` 会自动建，也可手工执行）：
+```sql
+CREATE TABLE IF NOT EXISTS sys_doc_seq (seq_key VARCHAR(64) NOT NULL PRIMARY KEY, val BIGINT NOT NULL);
+```
 新的权限点（8 `sys:read`、9 `sys:write`、10 `workflow:admin`）由 `data.sql` 幂等插入，启动时自动补齐。
 
 ## 乐观锁（version）
@@ -225,11 +229,13 @@ ALTER TABLE wf_process_def  ADD COLUMN version INT NOT NULL DEFAULT 0;
 | 403 | 403 | 无权限 | 缺少对应权限点，例如没有 `finance:read` 时调用 `GET /api/finance/*`，没有 `finance:write` 时调用 `POST /api/finance/payments`、`/settlements`；登录时账号已停用 |
 | 404 | 404 | 资源不存在 | 路径不存在；路径里的资源查不到，例如 `GET /api/finance/bills/{id}`、`GET /api/mdm/*/{id}`、`PUT /api/purchase/orders/{id}`。**先判路径资源**：路径资源不存在一律 404，优先于请求体里的 version、引用等检查 |
 | 405 | 405 | 请求方法不支持 | 例如 `PUT /api/finance/reconciliation` |
-| 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；死锁或锁等待超时在最外层整事务自动重试 3 次后仍失败；首次收货/入库（库存行尚不存在）并发不再返回 40900（#13）；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
+| 409 | 40900 | 并发冲突（乐观锁或状态已变化），提示"数据已被修改，请刷新后重试" | `POST /api/finance/settlements` 时不同请求号争抢同一单据或收付款（同一请求号的并发重复提交按幂等处理，不返回 40900）；`POST /api/purchase/orders/{id}/receive`、`/api/sales/orders/{id}/ship` 被并发重复调用；死锁或锁等待超时（含 H2 锁超时后回滚失败）在最外层整事务自动重试 3 次后仍失败（每次重试记 WARN 日志），返回 HTTP 409，不会是 500；首次收货/入库（库存行尚不存在）并发不再返回 40900（#13）；同一审批人对同一节点并发重复审批；其他未被业务处理的数据库唯一键冲突 |
 | 409 | 40901 | 主数据已被引用，不能删除 | `DELETE /api/mdm/*/{id}`：被订单、库存、应收应付单、收付款引用 |
-| 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |
+| 409 | 40902 | 幂等请求号复用但参数不同 | `POST /api/finance/settlements` 时同一个 `requestNo` 对应的 billId、paymentId 或 amount 和第一次不一致 |；`Idempotency-Key` 复用但请求参数不同，或同一 key 用在别的创建接口（#22）
 | 409 | 40903 | 单据状态已变更，提示"单据状态已变更，请刷新后重试" | `PUT /api/purchase/orders/{id}`、`PUT /api/sales/orders/{id}`：订单已不是草稿（读出时已不是草稿，或并发提交/审批导致定向更新影响 0 行后重读发现不是草稿）。参数校验和引用检查（供应商/客户、仓库、物料是否存在）先于状态判断：非法输入一律 400 |
+| 409 | 40904 | 请求处理中，请稍后重试 | 带 `Idempotency-Key` 的创建请求，同一用户同一 key 的上一次请求还没处理完（并发重复提交）；稍后用同一 key 重试会拿到原单据 |
 | 500 | 500 | 系统异常 | 未预期的异常 |
+| 503 | 50301 | 取号繁忙，请稍后重试 | 创建单据（采购单、销售单、手工出入库、收付款）及收货/发货时取单据号超时：取号连接池 1 秒内拿不到连接，或序号行锁等待超过 2 秒（例如被外部会话锁住）。此时还没开业务事务、没写任何数据，可直接重试；带 `Idempotency-Key` 时用同一 key 重试 |
 
 ## 财务闭环
 - 权限：查询类接口需要 `finance:read`，收付款登记和核销需要 `finance:write`（admin 已预置这两个权限）。
@@ -287,3 +293,49 @@ mvn verify   # 单元测试 + H2 集成测试 + JaCoCo 聚合报告 + 覆盖率�
 7. 用户/角色/菜单管理接口、数据权限（按组织/仓库）、操作日志
 6. Redis：单号号段、权限缓存、登录限流；接口文档（springdoc）、Flyway 迁移
 7. 单元/集成测试（Testcontainers）、CI、Docker 镜像；与 MES 项目对接（生产领料/完工入库）
+
+## 库存加锁顺序与流水
+
+采购收货、销售发货时，同一单据里同一 (物料, 仓库) 的多行会先合并数量，再按 (materialId, warehouseId) 升序逐个加锁更新库存，所有事务以相同顺序取锁，避免正反序单据并发死锁。库存流水按合并后的 (物料, 仓库) 各记一条，数量为该单据的合计，与库存行的一次变动一一对应（同一物料在单据里写了两行，只生成一条流水）。
+
+## 单号与库存流水前缀（#18）
+
+- **单号格式**：`前缀 + yyyyMMdd + 8 位序号`（如 `PO2026101400000001`），序号来自表 `sys_doc_seq`（按 `前缀+日期` 一行，`INSERT ... ON DUPLICATE KEY UPDATE val = val + 1`）。多实例共享同一库即不会重号。旧格式（前缀 + 14 位时间 + 4 位进程内序号 + 3 位随机数）的历史单号保持不变。
+- 取号走独立的小连接池（`doc-no`，最多 4 个连接）里的短事务，立即提交：序列行锁不会持到业务事务结束（否则所有收货会串行，并可能与库存行锁形成死锁），也不占业务连接池。代价是业务回滚后**号可能跳号**，单号只保证唯一、递增，不保证连续。
+- **库存流水前缀**：入库 `SMI`、出库 `SMO`，不再与销售订单的 `SO` 冲突。历史流水（`SI…`/`SO…`）不迁移（`txn_no` 无唯一约束，也不被其他表引用）；按前缀筛选流水时需同时考虑旧前缀。
+- **软删除的库存行**：`inv_stock` 的唯一键 (material_id, warehouse_id) 包含已软删除的行。出库仍视为无库存（400 库存不足），行保持删除状态；入库时复活该行：`deleted=0`、数量从 0 起算（旧数量作废）、`version+1`，再加上本次入库量。
+
+## 事务重试日志
+
+- 重试 / 重试耗尽的 WARN 写出真实的锁异常（例如 `com.mysql.cj.jdbc.exceptions.MySQLTransactionRollbackException` 或 H2 的 `JdbcSQLTimeoutException`）、`kind=deadlock|lock-timeout` 以及 `sqlState` / `errorCode`，而不是外层的 `TransactionSystemException` / `UncategorizedSQLException`。
+- 回滚失败且没有原始业务异常时返回 500，只记一条简短 ERROR（op、异常类、SQLState、错误码），不含 SQL，也不打堆栈。
+
+## 取号与 Idempotency-Key（#22）
+
+**创建请求的顺序**：参数校验（`@Valid`）→ 幂等占位（带 `Idempotency-Key` 时）→ 业务校验（引用的供应商/客户/仓库/物料、金额）→ 从独立取号池取号 → 开业务事务写库。
+收货 / 发货也一样：先在事务外按合并后的物料数取好库存流水号和应付/应收单号，再进事务（整事务重试时复用这批号）。
+等号期间请求不占主连接池的连接；取号池（`doc-no`，最多 4 个连接）拿连接最多等 `erp.doc-no.connection-timeout-ms`（默认 1000），
+序号行锁最多等 `erp.doc-no.lock-wait-seconds`（默认 2，MySQL 设会话级 `innodb_lock_wait_timeout`，H2 设 `LOCK_TIMEOUT`），超时返回 **503 / 50301**。
+单号日期按 `Asia/Shanghai`，与 JVM / 容器时区无关；序号超过 8 位时仍唯一（变成 9 位），记一条 WARN。
+
+**`Idempotency-Key` 请求头**：`POST /api/purchase/orders`、`/api/sales/orders`、`/api/inventory/in`、`/api/inventory/out`、`/api/finance/payments` 支持；不带则行为不变。
+
+- 记录在表 `sys_idempotency`，`UNIQUE (user_name, idem_key)`：key 按登录用户隔离，最长 128 个字符（空白或超长 400）。
+- 参数是否相同：对校验后的请求 DTO 做规范化 JSON（字段按名称排序，`BigDecimal` 去掉末尾 0，`"1.0"` 与 `"1"` 相同）再加上接口名取 SHA-256。
+- 同 key 同参数且已成功：返回原单据（不重复建单、不重复记账）；同 key 不同参数（或用在别的接口）：**409 / 40902**；上一次还在处理：**409 / 40904**。
+- 请求失败（含 400、503/50301、500）：占位记录删除，key 不被占用，用同一 key 重试会正常创建且只建一张。
+- 同一用户同一 key 并发提交只会生成一张单据（唯一索引占位）。
+- 记录保留 24 小时，过期的 key 视为新 key；每小时清理一次过期记录。
+- 已知限制：单据已提交但“标记完成”这一步失败（例如进程在两步之间崩溃）时，记录停在处理中，同 key 在 24 小时内返回 40904，不会重复建单。
+- 核销接口的 `requestNo` 幂等不变。
+
+已有 MySQL 库手工建表（启动时也会 `CREATE TABLE IF NOT EXISTS`）：
+```sql
+CREATE TABLE IF NOT EXISTS sys_idempotency (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY, user_name VARCHAR(64) NOT NULL, idem_key VARCHAR(128) NOT NULL,
+  req_hash CHAR(64) NOT NULL, status VARCHAR(16) NOT NULL, result_id BIGINT,
+  created_at DATETIME NOT NULL, expires_at DATETIME NOT NULL,
+  UNIQUE KEY uk_idem_user_key (user_name, idem_key), INDEX idx_idem_expires (expires_at));
+```
+
+**日志**：回滚失败且没有原始异常时，整个请求只记一条简短 ERROR（TxRetry 记过的，全局处理器不再记）；堆栈只在 `GlobalExceptionHandler` 的 DEBUG 级别输出。
