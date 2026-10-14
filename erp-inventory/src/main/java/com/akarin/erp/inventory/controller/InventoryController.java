@@ -22,6 +22,8 @@ import java.math.BigDecimal;
 @RequiredArgsConstructor
 public class InventoryController {
     private final InventoryService service;
+    /** 最外层整事务重试（仅死锁/锁等待超时）；service 方法本身是 @Transactional，每次重试都是新事务 */
+    private final com.akarin.erp.common.tx.TxRetry txRetry;
     private final StockMapper stockMapper;
     private final StockTxnMapper txnMapper;
 
@@ -46,13 +48,13 @@ public class InventoryController {
     @PostMapping("/in")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> in(@Valid @RequestBody StockReq r) {
-        return R.ok(service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark()));
+        return R.ok(txRetry.run(() -> service.stockIn(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
     }
 
     /** 手工出库（其他出库） */
     @PostMapping("/out")
     @PreAuthorize("hasAuthority('inventory:write')")
     public R<StockTxn> out(@Valid @RequestBody StockReq r) {
-        return R.ok(service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark()));
+        return R.ok(txRetry.run(() -> service.stockOut(r.materialId(), r.warehouseId(), r.qty(), "MANUAL", null, r.remark())));
     }
 }

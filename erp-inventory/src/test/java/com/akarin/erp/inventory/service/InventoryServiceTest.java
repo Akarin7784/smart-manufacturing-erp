@@ -52,24 +52,37 @@ class InventoryServiceTest {
         assertThatThrownBy(() -> svc.stockIn(1L, 1L, null, null, null, null)).isInstanceOf(BizException.class);
     }
 
-    @Test void stockInCreatesRecordAndTxn() {
+    @Test void stockInEnsuresRowThenLockedReadAndUpdate() {
+        when(stockMapper.selectOne(any())).thenReturn(stock("0"));
         when(stockMapper.updateById(any(Stock.class))).thenReturn(1);
         StockTxn t = svc.stockIn(1L, 1L, new BigDecimal("3"), null, null, null);
         assertThat(t.getBalanceAfter()).isEqualByComparingTo("3");
         assertThat(t.getBizType()).isEqualTo("MANUAL");
-        verify(stockMapper).insert(any(Stock.class));
+        var order = inOrder(stockMapper);
+        order.verify(stockMapper).ensureRow(1L, 1L);          // upsert，不再先插再捕获唯一键冲突
+        order.verify(stockMapper).selectOne(any());
+        order.verify(stockMapper).updateById(any(Stock.class));
+        verify(stockMapper, never()).insert(any(Stock.class));
     }
 
-    @Test void retriesOnVersionConflictThenFails() {
-        when(stockMapper.selectOne(any())).thenAnswer(inv -> stock("10"));
-        when(stockMapper.updateById(any(Stock.class))).thenReturn(0);
-        assertThatThrownBy(() -> svc.stockOut(1L, 1L, BigDecimal.ONE, null, null, null)).hasMessageContaining("并发冲突");
-        verify(stockMapper, times(3)).updateById(any(Stock.class));
-    }
-
-    @Test void retrySucceedsAfterOneConflict() {
-        when(stockMapper.selectOne(any())).thenAnswer(inv -> stock("10"));
-        when(stockMapper.updateById(any(Stock.class))).thenReturn(0, 1);
+    @Test void stockOutDoesNotCreateRow() {
+        when(stockMapper.selectOne(any())).thenReturn(stock("10"));
+        when(stockMapper.updateById(any(Stock.class))).thenReturn(1);
         assertThat(svc.stockOut(1L, 1L, new BigDecimal("4"), "X", "N", null).getBalanceAfter()).isEqualByComparingTo("6");
+        verify(stockMapper, never()).ensureRow(any(), any());
+    }
+
+    @Test void updateNotOneRowIs40900() {
+        when(stockMapper.selectOne(any())).thenReturn(stock("10"));
+        when(stockMapper.updateById(any(Stock.class))).thenReturn(0);
+        assertThatThrownBy(() -> svc.stockOut(1L, 1L, BigDecimal.ONE, null, null, null))
+                .isInstanceOf(BizException.class).extracting(e -> ((BizException) e).getCode()).isEqualTo(40900);
+        verify(stockMapper, times(1)).updateById(any(Stock.class));
+        verify(txnMapper, never()).insert(any(StockTxn.class));
+    }
+
+    @Test void overScaleRejected() {
+        when(stockMapper.selectOne(any())).thenReturn(stock("99999999999999"));
+        assertThatThrownBy(() -> svc.stockIn(1L, 1L, new BigDecimal("1"), null, null, null)).hasMessageContaining("超出数量上限");
     }
 }
