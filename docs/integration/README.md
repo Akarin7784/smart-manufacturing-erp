@@ -21,13 +21,13 @@
 5. 错误体过渡期保持 `R{code,msg,data}`，给出数字码对照表（`error-codes.md`）。
 6. 回调请求头 `Idempotency-Key` 必须等于 body `requestNo`；按服务身份去重；保留 ≥ 90 天。
 7. 完工入库在工单 **COMPLETED** 时触发（不是 CLOSED）。
-8. 领料为报工倒冲回传（报工成功后立即，一次报工一笔）；报废在工序上即时回传；退料须在完工前。
+8. 领料为报工倒冲回传（报工成功后立即，一次报工一笔）；报废在工序上即时回传；退料须在工单 CLOSED 前。
 
 ## 1. 接口一览
 
 | 方向 | 接口 | 托管方 | 触发 | 幂等 |
 | --- | --- | --- | --- | --- |
-| ERP→MES | `POST /api/integration/erp/work-orders/dispatch` | MES | ERP 生产订单审批通过 | `Idempotency-Key` = `erpProductionOrderNo` |
+| ERP→MES | `POST /api/integration/erp/work-orders/dispatch` | MES | ERP 生产订单审批通过 | `Idempotency-Key` = `erpProductionOrderNo`；同键不同请求体 → 409 / 40902 |
 | MES→ERP | `POST /api/integration/mes/material-issues` | ERP | 报工倒冲回传（报工成功后立即） | `requestNo`（`MI-{工单号}-{工序}-{报工ID}`） |
 | MES→ERP | `POST /api/integration/mes/finished-goods-receipts` | ERP | 工单 COMPLETED | `requestNo`（`FGR-{工单号}`，每工单一笔） |
 | MES→ERP | `POST /api/integration/mes/scraps` | ERP | 工序报废即时 | `requestNo`（`SCR-{工单号}-{工序}-{报工ID或NCR号}`） |
@@ -68,7 +68,7 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 - **领料（报工倒冲回传）**：MES 报工成功后立即回传本次报工倒冲的物料，一次报工一笔；必填 `operationNo`、`reportId` 追溯到工序 / 报工。ERP 生成生产领料出库单并扣库存。冲销报工的反向单据另议。
 - **完工入库**：工单进入 **COMPLETED** 时回传合格品数量；ERP 生成完工入库单。CLOSED 不触发。
 - **报废**：在工序上报废时即时回传，一次报废一笔；ERP 生成报废出库单。
-- **退料**（MES #72）：必须在工单 COMPLETED 之前完成；退料接口不在 M2 范围，后续另加契约。
+- **退料**（MES #72）：必须在工单 **CLOSED** 之前完成（COMPLETED 后、CLOSED 前仍可退料）；退料接口不在 M2 范围，后续另加契约。
 - 完工入库时工单未 COMPLETED、或生产订单已 CLOSED / 取消 → 409 / **40903**（现有 `ORDER_STATUS_CHANGED`）。
 - `quantity` 超过 6 位小数 → 400，**不做舍入**。
 - 回调整笔成功或整笔失败，不支持部分成功。
@@ -107,7 +107,7 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | OQ-MAP-1 | ERP 不传 `deviceId`，MES 改为可选 |
 | OQ-MAP-2 | 6 位小数字符串 |
 | OQ-MAP-3 | 物料、仓库编码两边一致；`uom` 须与物料主单位一致 |
-| OQ-FLOW-1 | 领料为报工倒冲回传；完工入库在 COMPLETED；报废即时；退料在完工前 |
+| OQ-FLOW-1 | 领料为报工倒冲回传；完工入库在 COMPLETED；报废即时；退料在 CLOSED 前 |
 
 ## 8. 边界用例（QA Mock）
 
@@ -131,6 +131,9 @@ ERP 向 MES auth-service 申请 `client_credentials`：client `erp-integration`�
 | B16 | 同 `(sub, requestNo)` 89 天后重发 | 仍按重放返回 200 |
 | B17 | 报废 `reasonCode` 不在 `SCRAP_REASON` 字典 | 400 / 400，不落库 |
 | B18 | 领料缺 `operationNo` 或 `reportId` | 400 / 400 |
+| B19 | 下达：同 `Idempotency-Key` 不同请求体 | 409 / 40902（不是 422） |
+
+所有数量字段（下达、领料行、完工入库、报废）共用 `Decimal6`：最多 6 位小数，超过 → 400，不舍入（B8 对所有回调和下达都适用）。
 
 ## 9. 测试约定（Mock）
 

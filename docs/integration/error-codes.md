@@ -17,6 +17,6 @@
 | 500 | 500 | `internal-error` | 系统异常 | 退避重试 | 已有 |
 | 50301 | 503 | `service-busy` | 取号繁忙；未落库、未占用 `requestNo` | 退避重试 | 已有 |
 
-MES 侧 problem type `idempotency-key-conflict` 在 MES 自己的接口里是 422；ERP 对应为 409 / 40902。
+`idempotency-key-conflict` 在所有接口（三个回调和下达 dispatch）都是 409 / 40902，不使用 422。
 网络错误、超时、429 一律退避重试；重试始终用同一个 `requestNo`。
 "计划新增"的码在回调实现 PR 中加入 `ErrorCode` 枚举，码值以本表为准。

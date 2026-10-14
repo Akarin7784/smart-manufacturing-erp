@@ -41,7 +41,7 @@ paths:
       description: |
         触发：**报工倒冲回传**——MES 报工成功后立即回传本次报工倒冲的物料，一次报工一笔；ERP 生成生产领料出库单并扣减库存。
         `operationNo` + `reportId` 追溯到工序 / 报工记录（MES #86 OQ-CB-4）。冲销报工的反向单据另议。
-        退料（#72）须在工单 COMPLETED 之前，走后续契约（不在 M2 范围）。
+        退料（#72）须在工单 CLOSED 之前（COMPLETED 后、CLOSED 前仍可退料），走后续契约（不在 M2 范围）。
         需要 scope `erp:integration:material-issue`。幂等见 README §3。
       security:
         - erpServiceToken: [erp:integration:material-issue]
@@ -222,7 +222,7 @@ paths:
         - 令牌：ERP 向 MES auth-service 申请 `client_credentials`，client `erp-integration`，
           scope `integration:workorder-dispatch`，aud `manufacturing-api`。
         - 错误体为 MES 的 problem+json（type 见 MES 契约）。ERP 重试规则：网络错误/5xx/429 退避重试；
-          401 刷新令牌后重试一次；400/403/409/422 不重试，标记失败转人工。
+          401 刷新令牌后重试一次；400/403/409（含 40902）/422 不重试，标记失败转人工。
       security:
         - mesServiceToken: [integration:workorder-dispatch]
       parameters:
@@ -266,8 +266,16 @@ paths:
         '400': {description: '校验失败 / 缺幂等键（MES problem+json：validation-error、idempotency-key-required）。不重试。'}
         '401': {description: '令牌缺失/无效/受众不符（authentication-required）。刷新令牌后重试一次。'}
         '403': {description: 'scope 不符（access-denied）。不重试。'}
-        '409': {description: 'erp-production-order-conflict：该 ERP 单号已绑定其他工单。不重试。'}
-        '422': {description: 'idempotency-key-conflict / release-masterdata-invalid。不重试。'}
+        '409':
+          description: '同 Idempotency-Key 不同请求体 → 409，code 40902（idempotency-key-conflict，不是 422）；或 erp-production-order-conflict（单号已绑定其他工单）。不重试。'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/R'}
+              examples:
+                keyReused:
+                  summary: 同键不同请求体
+                  value: {code: 40902, msg: 请求号已被使用且参数不一致}
+        '422': {description: 'release-masterdata-invalid（产品在 MES 无主数据）。不重试。幂等冲突不再用 422。'}
 
 components:
   securitySchemes:
@@ -386,7 +394,7 @@ components:
     Decimal6:
       type: string
       pattern: '^\d{1,12}(\.\d{1,6})?$'
-      description: 非负十进制字符串，最多 6 位小数，超过 → 400，**不做舍入**；ERP 下达时固定输出 6 位（如 "100.000000"）。比较/摘要按数值规范化（1.5 == 1.500000）。
+      description: 本契约**所有数量字段**共用此 schema（$ref）。非负十进制字符串，最多 6 位小数，超过 → 400，**不做舍入**；ERP 下达时固定输出 6 位（如 "100.000000"）。比较/摘要按数值规范化（1.5 == 1.500000）。
     R:
       type: object
       description: ERP 统一响应体（过渡期保持）。`code=0` 成功；非 0 见 ErrorCode。
