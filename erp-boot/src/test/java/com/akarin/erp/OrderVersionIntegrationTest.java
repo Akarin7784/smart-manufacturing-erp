@@ -375,4 +375,21 @@ class OrderVersionIntegrationTest extends SysTestSupport {
             assertThat(dbVersion(t[1], id)).isEqualTo(v);
         }
     }
+
+    /** 引用检查先于状态判断：非草稿订单引用不存在的供应商/客户、仓库或物料 → 400（不是 40903） */
+    @Test void missingReferenceOnNonDraftOrderIs400() throws Exception {
+        for (String[] t : new String[][]{{"purchase", "pur_order", "supplierId"}, {"sales", "sal_order", "customerId"}}) {
+            long partner = t[0].equals("purchase") ? sup : cust;
+            long id = ok(admin, "POST", "/api/" + t[0] + "/orders", createBody(t[2], partner)).path("order").path("id").asLong();
+            ok(admin, "POST", "/api/" + t[0] + "/orders/" + id + "/submit", null);
+            int v = dbVersion(t[1], id);
+            String url = "/api/" + t[0] + "/orders/" + id;
+            String good = updateBody(v, t[2], partner, "x");
+            assertThat(code(admin, "PUT", url, good.replace("\"" + t[2] + "\":" + partner, "\"" + t[2] + "\":999999"))).as(t[0] + " 伙伴不存在").isEqualTo(400);
+            assertThat(code(admin, "PUT", url, good.replace("\"warehouseId\":" + wh, "\"warehouseId\":999999"))).as(t[0] + " 仓库不存在").isEqualTo(400);
+            assertThat(code(admin, "PUT", url, good.replace("\"materialId\":" + mat, "\"materialId\":999999"))).as(t[0] + " 物料不存在").isEqualTo(400);
+            assertThat(code(admin, "PUT", url, good)).as("引用都存在 → 40903").isEqualTo(40903);
+            assertThat(dbVersion(t[1], id)).isEqualTo(v);
+        }
+    }
 }

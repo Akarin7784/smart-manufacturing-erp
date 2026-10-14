@@ -69,11 +69,12 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
     public SalesOrderDetail update(Long id, SalesOrderUpdateReq req) {
         SalesOrder o = require(id);              // 先判存在：不存在 404
         Versions.requirePresent(req.version());     // 再判 version：缺失 400
-        requireDraft(o);
+        // 引用检查（供应商、仓库、物料）属于输入校验，先于状态判断：非草稿订单引用不存在的对象也返回 400
         customerService.requireRef(req.customerId());
         warehouseService.requireRef(req.warehouseId());
         List<SalesOrderItem> items = buildItems(req.items().stream()
                 .map(l -> new Line(l.materialId(), l.qty(), l.price())).toList());
+        requireDraft(o);
         BigDecimal total = totalOf(items);
         itemMapper.delete(new LambdaQueryWrapper<SalesOrderItem>().eq(SalesOrderItem::getOrderId, id));
         insertItems(id, items);
@@ -88,7 +89,9 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
                 .setSql("version = version + 1"));
         if (rows != 1) {
             // 0 行：重读区分原因——已不是草稿（被并发提交/审批）→ 409/40903；否则 version 过期 → 40900。事务回滚，明细替换一并撤销
-            requireDraft(require(id));
+            // 必须加锁读：MySQL REPEATABLE READ 下普通 SELECT 读的是本事务开头 require(id) 建立的快照，
+            // 会把已被并发提交的订单仍看成 DRAFT 而误报 40900；FOR UPDATE 是当前读，拿到最新已提交的状态（H2 同样支持）
+            requireDraft(requireLatest(id));
             Versions.requireOneRow(rows);
         }
         return detail(id);
@@ -181,6 +184,14 @@ public class SalesOrderService extends ServiceImpl<SalesOrderMapper, SalesOrder>
 
     private void requireDraft(SalesOrder o) {
         if (!"DRAFT".equals(o.getStatus())) throw new BizException(ErrorCode.ORDER_STATUS_CHANGED, ErrorCode.ORDER_STATUS_CHANGED.getDefaultMsg());   // 不是草稿 → 409/40903
+    }
+
+    /** 加锁当前读（SELECT ... FOR UPDATE），绕过 RR 快照 */
+    private SalesOrder requireLatest(Long id) {
+        SalesOrder o = baseMapper.selectOne(new LambdaQueryWrapper<SalesOrder>()
+                .eq(SalesOrder::getId, id).last("FOR UPDATE"));
+        if (o == null) throw new BizException(ErrorCode.NOT_FOUND, "单据不存在: " + id);
+        return o;
     }
 
     private SalesOrder require(Long id) {
