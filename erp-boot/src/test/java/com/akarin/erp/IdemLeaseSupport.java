@@ -15,6 +15,7 @@ import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 /**
  * #22-9 租期：业务已提交但记录仍 PROCESSING → 租期后重放；租期内 → 40904；
@@ -250,5 +251,46 @@ abstract class IdemLeaseSupport extends ApiTestSupport {
                 + "\",\"items\":[{\"materialId\":" + material + ",\"qty\":\"1\",\"price\":\"1\"},{\"materialId\":" + mat2 + ",\"qty\":\"1\",\"price\":\"1\"}]}";
         Res po = post2(admin, "/api/purchase/orders", poBody, "ml-po-" + tag);
         assertThat(po.code()).isZero();
+    }
+
+    String raw(String method, String url, String body, String key) throws Exception {
+        var req = (method.equals("GET") ? get(url) : post(url).contentType(MediaType.APPLICATION_JSON).content(body))
+                .header("Authorization", "Bearer " + admin);
+        if (key != null) req.header(IdempotencyService.HEADER, key);
+        var res = mvc.perform(req).andReturn().getResponse();
+        String out = res.getContentAsString(StandardCharsets.UTF_8);
+        assertThat(om.readTree(out).path("code").asInt()).as(method + " " + url + " -> " + out).isZero();
+        return out;
+    }
+
+    /** 幂等内部字段 idemUser / idemKey / idemHash 不出现在任何单据的创建、重放、查询响应里 */
+    void idemFieldsNotInResponses() throws Exception {
+        setUpRefs();
+        long customer = mdm(admin, "customers", "LC");
+        String tag = uniq("js");
+        java.util.List<String> outs = new java.util.ArrayList<>();
+        String poKey = "js-po-" + tag;
+        String created = raw("POST", "/api/purchase/orders", po(tag), poKey);
+        outs.add(created);
+        outs.add(raw("POST", "/api/purchase/orders", po(tag), poKey));  // 重放
+        long poId = om.readTree(created).path("data").path("order").path("id").asLong();
+        outs.add(raw("GET", "/api/purchase/orders/" + poId, null, null));
+        outs.add(raw("GET", "/api/purchase/orders?current=1&size=50", null, null));
+        String so = "{\"customerId\":" + customer + ",\"warehouseId\":" + warehouse + ",\"items\":[{\"materialId\":" + material + ",\"qty\":1,\"price\":1}]}";
+        String soOut = raw("POST", "/api/sales/orders", so, "js-so-" + tag);
+        outs.add(soOut);
+        outs.add(raw("POST", "/api/sales/orders", so, "js-so-" + tag));
+        long soId = om.readTree(soOut).path("data").path("order").path("id").asLong();
+        if (soId > 0) outs.add(raw("GET", "/api/sales/orders/" + soId, null, null));
+        String in = "{\"materialId\":" + material + ",\"warehouseId\":" + warehouse + ",\"qty\":\"1\",\"remark\":\"" + tag + "\"}";
+        outs.add(raw("POST", "/api/inventory/in", in, "js-in-" + tag));
+        outs.add(raw("POST", "/api/inventory/in", in, "js-in-" + tag));
+        String pay = "{\"paymentType\":\"PAYMENT\",\"partnerId\":" + supplier + ",\"amount\":1}";
+        outs.add(raw("POST", "/api/finance/payments", pay, "js-pay-" + tag));
+        outs.add(raw("POST", "/api/finance/payments", pay, "js-pay-" + tag));
+        outs.add(raw("GET", "/api/finance/payments?current=1&size=50", null, null));
+        // 确认这些单据确实落了幂等键（字段存在于库里，只是不对外）
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM pur_order WHERE idem_key=?", Integer.class, poKey)).isEqualTo(1);
+        for (String o : outs) assertThat(o.toLowerCase()).doesNotContain("idemuser", "idemkey", "idemhash", "idem_user", "idem_key", "idem_hash");
     }
 }
