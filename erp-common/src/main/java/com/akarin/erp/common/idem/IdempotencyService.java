@@ -93,9 +93,16 @@ public class IdempotencyService {
             Row r = find(user, key);
             if (r == null) { if (round < 3) continue; throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS); }
             if (r.expiresAt().isBefore(now())) {
-                // 过期：删掉旧记录（条件删除，并发时只有一个能删到），按新 key 再占位
-                jdbc.update("DELETE FROM sys_idempotency WHERE id = ? AND expires_at < ?", r.id(), Timestamp.valueOf(now()));
+                // 过期：删掉旧记录（条件删除，并发时只有一个能删到），按新 key 再占位。
+                // #22-11：删不掉（出错或反复争抢）时不拿过期的旧记录比对，直接 40904 让调用方稍后重试
+                try {
+                    jdbc.update("DELETE FROM sys_idempotency WHERE id = ? AND expires_at < ?", r.id(), Timestamp.valueOf(now()));
+                } catch (RuntimeException e) {
+                    log.warn("idempotency expired-record cleanup failed: rowId={} exception={}", r.id(), e.getClass().getName());
+                    throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
+                }
                 if (round < 3) continue;
+                throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);
             }
             if (!r.hash().equals(hash)) throw new BizException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency-Key 已被使用且参数不一致");
             if (!DONE.equals(r.status()) || r.resultId() == null) throw new BizException(ErrorCode.IDEMPOTENCY_IN_PROGRESS);

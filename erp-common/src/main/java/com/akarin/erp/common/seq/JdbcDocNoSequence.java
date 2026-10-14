@@ -32,13 +32,13 @@ public class JdbcDocNoSequence implements NoGenerator.Sequence, InitializingBean
 
     /**
      * Spring 使用：按应用的数据源配置建一个独立小连接池（#22-3/5）。
-     * 拿连接最多等 connectionTimeout（默认 1 秒），序列行锁最多等 lockWaitSeconds（默认 2 秒，MySQL 会话级
+     * 拿连接最多等 connectionTimeout（默认 1 秒），序列行锁每次最多等 lockWaitSeconds（默认 1 秒；锁超时会就地再试 1 次，MySQL 会话级
      * innodb_lock_wait_timeout / H2 LOCK_TIMEOUT），超时即 503/50301，不会长时间挂住请求。
      */
     @org.springframework.beans.factory.annotation.Autowired
     public JdbcDocNoSequence(DataSourceProperties props,
                              @org.springframework.beans.factory.annotation.Value("${erp.doc-no.connection-timeout-ms:1000}") long connectionTimeoutMs,
-                             @org.springframework.beans.factory.annotation.Value("${erp.doc-no.lock-wait-seconds:2}") int lockWaitSeconds) {
+                             @org.springframework.beans.factory.annotation.Value("${erp.doc-no.lock-wait-seconds:1}") int lockWaitSeconds) {
         HikariDataSource ds = props.initializeDataSourceBuilder().type(HikariDataSource.class).build();
         ds.setPoolName("doc-no");
         ds.setMaximumPoolSize(4);
@@ -73,8 +73,59 @@ public class JdbcDocNoSequence implements NoGenerator.Sequence, InitializingBean
         this.owned = null;
     }
 
+    /**
+     * 序号行死锁 / 锁等待超时时就地重试（#22-2），不回滚整个业务事务（取号本来就在业务事务之前）。
+     * <ul>
+     * <li>死锁（MySQL 1213、H2 40001）：数据库立即判负，重试代价小，最多再试 2 次（共 3 次）。</li>
+     * <li>锁等待超时（MySQL 1205、H2 50200 / HYT00）：每次已等满一个锁等待时长，只再试 1 次（共 2 次）。</li>
+     * <li>拿不到取号连接（池满，1 秒超时）：说明取号已经拥堵，不重试，直接 503。</li>
+     * </ul>
+     * 每次重试换一个连接（H2 锁超时后 Hikari 会丢弃该连接），重试前随机退避 10~50ms。
+     * 最坏延迟（默认 connectionTimeout 1s、lockWait 1s）：锁超时路径 2 ×（拿连接 ≤1s + 锁等待 1s）+ 退避 ≤50ms ≈ 4.05s；
+     * 常见情形（连接立即拿到、行被外部长时间锁住）≈ 2 × 1s + 退避 ≈ 2.05s，与改动前单次 2s 的预算相当。
+     */
+    static final int MAX_DEADLOCK_ATTEMPTS = 3, MAX_TIMEOUT_ATTEMPTS = 2;
+
     @Override
     public long next(String key) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return once(key);
+            } catch (SQLException e) {
+                if (!busy(e)) throw new DataAccessResourceFailureException("取单据号失败: " + key, e);
+                Kind k = kind(e);
+                int max = k == Kind.DEADLOCK ? MAX_DEADLOCK_ATTEMPTS : k == Kind.LOCK_TIMEOUT ? MAX_TIMEOUT_ATTEMPTS : 1;
+                if (attempt < max) {
+                    log.warn("doc-no retry: key={} attempt={}/{} kind={} sqlState={} errorCode={}", key, attempt, max, k, e.getSQLState(), e.getErrorCode());
+                    try { Thread.sleep(java.util.concurrent.ThreadLocalRandom.current().nextLong(10, 51)); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw busyException(key, attempt, k, e); }
+                    continue;
+                }
+                throw busyException(key, attempt, k, e);
+            }
+        }
+    }
+
+    enum Kind { DEADLOCK, LOCK_TIMEOUT, POOL_TIMEOUT }
+
+    static Kind kind(SQLException e) {
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof java.sql.SQLTransientConnectionException) return Kind.POOL_TIMEOUT;
+            if (t instanceof SQLException s) {
+                if (s.getErrorCode() == 1213 || s.getErrorCode() == 40001) return Kind.DEADLOCK;
+                if (s.getErrorCode() == 1205 || s.getErrorCode() == 50200 || "HYT00".equals(s.getSQLState())) return Kind.LOCK_TIMEOUT;
+                if ("40001".equals(s.getSQLState())) return Kind.DEADLOCK;
+            }
+        }
+        return Kind.LOCK_TIMEOUT;
+    }
+
+    private RuntimeException busyException(String key, int attempts, Kind k, SQLException e) {
+        log.warn("doc-no busy: key={} attempts={} kind={} exception={} sqlState={} errorCode={}", key, attempts, k, e.getClass().getName(), e.getSQLState(), e.getErrorCode());
+        return new com.akarin.erp.common.exception.BizException(com.akarin.erp.common.exception.ErrorCode.DOC_NO_BUSY);
+    }
+
+    private long once(String key) throws SQLException {
         try (Connection c = dataSource.getConnection()) {
             boolean auto = c.getAutoCommit();
             c.setAutoCommit(false);
@@ -97,12 +148,6 @@ public class JdbcDocNoSequence implements NoGenerator.Sequence, InitializingBean
             } finally {
                 try { c.setAutoCommit(auto); } catch (SQLException ignore) { /* 连接已损坏，归还时会被丢弃 */ }
             }
-        } catch (SQLException e) {
-            if (busy(e)) {
-                log.warn("doc-no busy: key={} exception={} sqlState={} errorCode={}", key, e.getClass().getName(), e.getSQLState(), e.getErrorCode());
-                throw new com.akarin.erp.common.exception.BizException(com.akarin.erp.common.exception.ErrorCode.DOC_NO_BUSY);
-            }
-            throw new DataAccessResourceFailureException("取单据号失败: " + key, e);
         }
     }
 
